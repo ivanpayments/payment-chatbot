@@ -1,0 +1,110 @@
+{
+  "hero": {
+    "uptitle": "Payment analytics",
+    "h1": "A conversational analyst for the Head of Payments",
+    "sub": "Imagine you are the Head of Payments at a global SaaS company. The chatbot helps you manage the business by answering every question about your transactions in plain English",
+    "stats": [
+      {
+        "k": "Countries",
+        "v": "30"
+      },
+      {
+        "k": "Annual TPV",
+        "v": "~$2B"
+      },
+      {
+        "k": "Acquirers",
+        "v": "14"
+      }
+    ]
+  },
+  "section_what": {
+    "label": "What is this",
+    "heading": "A chatbot leveraging transaction data to answer questions about your payment performance",
+    "body": "Chatbot leverages transaction data to conduct performance analysis of payments setup and answer ad-hoc questions from various stakeholders (CFO, head of risk, operations lead etc.). Chatbot is accessible on web, via WhatsApp or SMS"
+  },
+  "section_book": {
+    "label": "Which data it uses",
+    "heading": "Synthetic transaction data, designed to reproduce the statistical behaviour of payments within a global SaaS company",
+    "body_after_stats": "<p style='margin:0 0 10px'>The data includes various types of transaction data typically handled by SaaS companies:</p><ul style='margin:0 0 28px; padding-left:20px; font-size:15.5px; line-height:1.75; color:#222'><li style='margin:0 0 4px'>Authorization and processing status</li><li style='margin:0 0 4px'>Recurrent subscriptions</li><li style='margin:0 0 4px'>3DS flow and tokenization</li><li style='margin:0 0 4px'>Per-transaction FX, interchange and scheme fees applied</li><li style='margin:0 0 4px'>Retries and provider routing</li></ul>",
+    "body_synthetic": "<b>The dataset is synthetic.</b> It has been engineered to reproduce the statistical behaviour of a book at this scale and is used for pattern analysis. In a production deployment, the same chatbot can be rebuilt on top of the company’s real systems and data sources (transaction processing engine, acquirer statements, data warehouse, etc.)"
+  },
+  "section_who": {
+    "label": "Who are the users",
+    "heading": "The Head of Payments and their team",
+    "body": "The primary users are the Head of Payments, their team, and stakeholders in the organization interested in payment performance: the CFO interested in cost of payments; the Chief Commercial Officer who would like to understand revenue lost due to gaps in payment methods offering; the fraud lead monitoring fraud rates; the regional operations team resolving customer payment complaints; the strategy team evaluating acquirer rationalisation"
+  },
+  "section_why": {
+    "label": "What it answers",
+    "heading": "Every question about payments, from long-term contract economics to real-time performance across providers, countries and payment methods",
+    "body": "The Head of Payments can ask the chatbot any question based on the transaction data. The chatbot can also generate files such as financial models, voice notes, PDF reports sample report (/sample_report.pdf). There are several recurrent problems with payments that are typical for companies of this scale:",
+    "points": [
+      "<b>Volume commitments and rebate tiers are tracked only on a quarterly basis.</b> Contracts carry minimums, step-downs and rebate thresholds which can be leveraged if data is available and routing decisions are made on a weekly basis. Providers increase fees without notice, or make mistakes in billing. The chatbot can monitor the commitments and suggest the best actions to optimize the payments setup",
+      "<b>Approval-rate performance across the stack is opaque.</b> Approval rates can diverge by 5–15 pp across the acquirer portfolio. Merchant teams often notice outages and provider unavailability only after customers complain about failed transactions. The chatbot can alert users of ongoing outages",
+      "<b>Local payment methods and checkout configuration are often not optimized.</b> Each country’s customers expect specific payment methods, currencies and installment options. The chatbot can analyze customer purchase patterns and checkout configuration, and identify opportunities for improvement"
+    ]
+  },
+  "section_whymatters": {
+    "label": "Why this matters",
+    "heading": "Analysis of payments performance takes days of manual work",
+    "body": "Merchants of similar scale typically dedicate three to five analysts to monitor their payments setup. Time-consuming activities include among others isolating reasons for approval drop across providers, tracking 200+ routing rules in Excel, identifying PSP fee changes which were not communicated, and detecting provider outages and degradation. This chatbot turns a multi-day investigation into a two-minute conversation",
+    "stats": [
+      {
+        "k": "Resource savings",
+        "v": "3–5 FTE"
+      },
+      {
+        "k": "Investigation time",
+        "v": "Days → minutes"
+      }
+    ]
+  },
+  "section_howbuilt": {
+    "label": "How it works",
+    "heading": "Claude Opus writing scripts in a sandboxed environment",
+    "body": "Claude Opus 4.6 writes and runs Python scripts in a sandboxed environment against the transaction dataset, and streams the answer back. Two selected questions carry pre-generated answers to enable quick user demo. The same agent also answers on WhatsApp and SMS, connected via Twilio"
+  },
+  "cta": {
+    "text": "Give it a try",
+    "arrow": "→"
+  },
+  "chat": {
+    "status_pill": "● Live",
+    "title": "Chat with co-pilot",
+    "sub": "Ask anything about your transactions",
+    "chips_label": "Try a question from your team",
+    "chips": [
+      {
+        "stakeholder": "CFO",
+        "question": "Cost per approved transaction jumped from $43 to $63 last quarter. What's driving it, and what's the single biggest lever we can pull this quarter to solve this?",
+        "prebuilt": true
+      },
+      {
+        "stakeholder": "LATAM ops",
+        "question": "Brazil approvals fell 3 percentage points this week. What caused it and how fast can we fix it?",
+        "prebuilt": true
+      },
+      {
+        "stakeholder": "Product",
+        "question": "How much revenue has the card-refresh tool saved us so far, and is it worth rolling it out everywhere?"
+      },
+      {
+        "stakeholder": "Strategy",
+        "question": "When a payment fails at one processor, trying a different one often works. Which five markets would recover the most money from that?"
+      },
+      {
+        "stakeholder": "Finance",
+        "question": "Which of our processors is charging more than the contracted rate for currency conversion, and how much is it costing us a year?"
+      },
+      {
+        "stakeholder": "CEO brief",
+        "question": "How does our approval rate compare to other SaaS companies of our size, and what is the single biggest change that would close the gap?"
+      }
+    ],
+    "placeholder": "Type a question…",
+    "send_label": "Send",
+    "you_label": "You",
+    "claude_label": "Claude",
+    "thinking_label": "Claude is thinking… Response time is typically 2-3 minutes as Claude needs to analyze source files to produce the most comprehensive answer. Try one of the questions with pre-generated answers for faster response"
+  }
+}

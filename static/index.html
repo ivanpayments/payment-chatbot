@@ -1,0 +1,1314 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>A conversational analyst for the Head of Payments</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d0d0d'/><rect x='5' y='19' width='3.6' height='8' rx='0.6' fill='%23c6a668'/><rect x='10.6' y='14' width='3.6' height='13' rx='0.6' fill='%23c6a668'/><rect x='16.2' y='9' width='3.6' height='18' rx='0.6' fill='%23c6a668'/><rect x='21.8' y='5' width='3.6' height='22' rx='0.6' fill='%23c6a668'/></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<style>
+  :root {
+    --ink: #0d0d0d;
+    --white: #fff;
+    --gray-bg: #f7f7f5;
+    --line: rgba(0,0,0,0.1);
+    --line-strong: rgba(0,0,0,0.18);
+    --muted: #6b6b6b;
+    --sans: 'Inter', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+    --mono: 'JetBrains Mono', 'SFMono-Regular', Consolas, monospace;
+
+    --chat-bg: #0f1115;
+    --chat-surface: #161a21;
+    --chat-surface-2: #1d222b;
+    --chat-ink: #e9ecef;
+    --chat-muted: #8a93a0;
+    --chat-line: rgba(255,255,255,0.08);
+    --chat-line-strong: rgba(255,255,255,0.18);
+    --chat-accent: #c6a668;
+    --chat-user-bg: #1f2530;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body {
+    background: var(--white);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-weight: 400;
+    line-height: 1.6;
+    font-size: 16px;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* Hero band — full-bleed cover image, centered white text */
+  .hero-band {
+    position: relative;
+    height: 90vh;
+    min-height: 500px;
+    background-image: url('hero.jpg?v=20260416');
+    background-size: cover;
+    background-position: center center;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    color: var(--white);
+    overflow: hidden;
+  }
+  .hero-band::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.45);
+    z-index: 1;
+  }
+  .hero-inner {
+    position: relative;
+    z-index: 2;
+    padding: 0 20px;
+    max-width: 900px;
+  }
+  .uptitle {
+    font-size: 14px;
+    letter-spacing: 2.5px;
+    text-transform: uppercase;
+    color: #fff;
+    margin-bottom: 28px;
+    font-weight: 400;
+  }
+  .hero-h1 {
+    font-size: 72px;
+    font-weight: 400;
+    line-height: 1.1;
+    letter-spacing: -0.5px;
+    margin: 0 0 24px;
+    color: #fff;
+  }
+  .hero-sub {
+    font-size: 16px;
+    font-weight: 300;
+    color: rgba(255,255,255,0.92);
+    line-height: 1.55;
+    margin: 0 auto;
+    max-width: 820px;
+  }
+  .hero-stats {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0;
+    max-width: 720px;
+    margin: 44px auto 0;
+    border-top: 1px solid rgba(255,255,255,0.25);
+    border-bottom: 1px solid rgba(255,255,255,0.25);
+  }
+  .hero-stats > div { padding: 18px 12px; text-align: center; }
+  .hero-stats .k {
+    font-size: 10px;
+    letter-spacing: 1.8px;
+    text-transform: uppercase;
+    color: rgba(255,255,255,0.7);
+    margin-bottom: 6px;
+  }
+  .hero-stats .v {
+    font-size: 24px;
+    font-weight: 400;
+    letter-spacing: -0.3px;
+    color: #fff;
+  }
+
+  /* Two-column body */
+  .two-col {
+    display: grid;
+    grid-template-columns: minmax(0, 5fr) minmax(0, 6fr);
+    gap: 80px;
+    padding: 72px 60px 120px;
+    max-width: 1440px;
+    margin: 0 auto;
+    align-items: start;
+  }
+
+  .left-col section { margin-bottom: 52px; }
+  .left-col section:last-child { margin-bottom: 0; }
+  .section-label {
+    font-size: 11px;
+    letter-spacing: 2.5px;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 14px;
+  }
+  .section-h {
+    font-size: 24px;
+    font-weight: 500;
+    margin: 0 0 18px;
+    letter-spacing: -0.2px;
+    line-height: 1.3;
+  }
+  .left-col p {
+    font-size: 15.5px;
+    line-height: 1.75;
+    color: #222;
+    margin: 0 0 14px;
+  }
+  .left-col p b { font-weight: 500; color: var(--ink); }
+
+  .left-col ol {
+    margin: 16px 0 0;
+    padding: 0;
+    list-style: none;
+    counter-reset: n;
+  }
+  .left-col ol li {
+    counter-increment: n;
+    padding: 18px 0 18px 44px;
+    border-top: 1px solid var(--line);
+    position: relative;
+    font-size: 15px;
+    line-height: 1.7;
+    color: #222;
+  }
+  .left-col ol li:last-child { border-bottom: 1px solid var(--line); }
+  .left-col ol li::before {
+    content: counter(n, decimal-leading-zero);
+    position: absolute;
+    left: 0;
+    top: 20px;
+    font-size: 11px;
+    letter-spacing: 1.5px;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+  }
+  .left-col ol li b { font-weight: 500; color: var(--ink); }
+
+  .book-stats {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 0;
+    border-top: 1px solid var(--line);
+    border-bottom: 1px solid var(--line);
+    margin: 16px 0 0;
+  }
+  .whymatters-stats {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 0;
+    border-top: 1px solid var(--line);
+    border-bottom: 1px solid var(--line);
+    margin: 24px 0 0;
+  }
+  .whymatters-stats > div { padding: 18px 16px 18px 0; }
+  .whymatters-stats .k {
+    font-size: 10px;
+    letter-spacing: 1.8px;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 6px;
+  }
+  .whymatters-stats .v {
+    font-size: 28px;
+    font-weight: 400;
+    letter-spacing: -0.3px;
+  }
+  .book-stats > div { padding: 18px 16px 18px 0; }
+  .book-stats .k {
+    font-size: 10px;
+    letter-spacing: 1.8px;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 6px;
+  }
+  .book-stats .v {
+    font-size: 22px;
+    font-weight: 400;
+    letter-spacing: -0.3px;
+  }
+
+  .cta-give-it-a-try {
+    display: inline-flex;
+    align-items: center;
+    gap: 12px;
+    padding: 18px 22px;
+    background: var(--ink);
+    color: var(--white);
+    text-decoration: none;
+    font-size: 13px;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    font-weight: 500;
+    border-radius: 2px;
+  }
+  .cta-give-it-a-try .arrow {
+    font-size: 18px;
+    line-height: 1;
+    transition: transform 0.2s ease;
+  }
+  .cta-give-it-a-try:hover .arrow { transform: translateX(4px); }
+
+  /* ============ CHAT PANEL ============ */
+  .right-col {
+    position: sticky;
+    top: 32px;
+    background: var(--chat-bg);
+    color: var(--chat-ink);
+    padding: 0;
+    max-height: calc(100vh - 64px);
+    display: flex;
+    flex-direction: column;
+    border-radius: 8px;
+    overflow: hidden;
+    box-shadow: 0 30px 80px -30px rgba(0,0,0,0.4), 0 0 0 1px rgba(255,255,255,0.04);
+  }
+
+  /* Chat top bar — looks like a real app header */
+  .chat-topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 24px;
+    background: var(--chat-surface);
+    border-bottom: 1px solid var(--chat-line);
+  }
+  .chat-topbar-left {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .chat-dots { display: flex; gap: 6px; }
+  .chat-dots span {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.12);
+  }
+  .chat-dots span:nth-child(1) { background: #ff5f57; }
+  .chat-dots span:nth-child(2) { background: #febc2e; }
+  .chat-dots span:nth-child(3) { background: #28c840; }
+  .chat-topbar-title {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--chat-muted);
+    letter-spacing: 0.3px;
+  }
+  .chat-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: #6ed08a;
+    letter-spacing: 0.3px;
+  }
+  .chat-status .live-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: #28c840;
+    box-shadow: 0 0 0 0 rgba(40,200,64,0.6);
+    animation: live 1.8s infinite ease-out;
+  }
+  @keyframes live {
+    0% { box-shadow: 0 0 0 0 rgba(40,200,64,0.6); }
+    70% { box-shadow: 0 0 0 6px rgba(40,200,64,0); }
+    100% { box-shadow: 0 0 0 0 rgba(40,200,64,0); }
+  }
+
+  .right-col-wrap {
+    position: sticky;
+    top: 32px;
+    display: flex;
+    flex-direction: column;
+    max-height: calc(100vh - 64px);
+  }
+  .right-col-wrap .right-col {
+    position: static;
+    top: auto;
+    max-height: none;
+    flex: 1;
+    min-height: 0;
+  }
+  .channel-tabs {
+    display: flex;
+    gap: 32px;
+    padding: 0 4px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+    margin-bottom: 16px;
+  }
+  .channel-tab {
+    background: none;
+    border: 0;
+    padding: 10px 0 14px;
+    font: inherit;
+    font-size: 12px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: rgba(255,255,255,0.4);
+    cursor: pointer;
+    position: relative;
+    transition: color 0.2s ease;
+  }
+  .channel-tab:hover { color: rgba(255,255,255,0.8); }
+  .channel-tab--active { color: var(--ink, #fff); }
+  .channel-tab--active::after {
+    content: '';
+    position: absolute;
+    left: 0; right: 0; bottom: -1px;
+    height: 2px;
+    background: var(--ink, #fff);
+  }
+  @media (prefers-color-scheme: light) {
+    .channel-tabs { border-bottom-color: rgba(0,0,0,0.1); }
+    .channel-tab { color: rgba(0,0,0,0.4); }
+    .channel-tab:hover { color: rgba(0,0,0,0.8); }
+    .channel-tab--active { color: #000; }
+    .channel-tab--active::after { background: #000; }
+  }
+
+  .whatsapp-panel, .sms-panel {
+    flex: 1;
+    display: none;
+    flex-direction: column;
+    padding: 36px 40px;
+    overflow-y: auto;
+    background: #ffffff;
+    color: #111111;
+  }
+  .whatsapp-panel h3, .sms-panel h3 {
+    margin: 0 0 10px;
+    font-size: 20px;
+    font-weight: 600;
+    color: #111111;
+  }
+  .whatsapp-panel p, .sms-panel p { color: rgba(0,0,0,0.6); font-size: 14px; line-height: 1.6; margin: 0 0 18px; }
+  .whatsapp-panel ol, .sms-panel ol { padding-left: 22px; margin: 0 0 22px; font-size: 14px; line-height: 1.75; color: #111111; }
+  .whatsapp-panel ol li, .sms-panel ol li { margin-bottom: 6px; }
+  .whatsapp-panel ol strong, .sms-panel ol strong { font-weight: 600; }
+  .wa-step {
+    margin: 0 0 22px;
+  }
+  .wa-step-label {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    color: rgba(0,0,0,0.45);
+    margin-bottom: 8px;
+  }
+  .wa-step-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: #111111;
+    margin-bottom: 10px;
+  }
+  .wa-step-hint {
+    font-size: 13px;
+    color: rgba(0,0,0,0.6);
+    line-height: 1.55;
+    margin-bottom: 10px;
+  }
+  .wa-examples { display: flex; flex-direction: column; gap: 8px; }
+  .whatsapp-code {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: rgba(0,0,0,0.04);
+    border: 1px solid rgba(0,0,0,0.1);
+    border-radius: 6px;
+    padding: 12px 14px;
+    font-family: var(--mono);
+    font-size: 13px;
+    margin: 4px 0 20px;
+  }
+  .whatsapp-code code { flex: 1; color: #111111; }
+  .whatsapp-code button {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.8px;
+    text-transform: uppercase;
+    color: rgba(0,0,0,0.55);
+    background: transparent;
+    border: 1px solid rgba(0,0,0,0.2);
+    border-radius: 4px;
+    padding: 5px 10px;
+    cursor: pointer;
+  }
+  .whatsapp-code button:hover { color: #111111; border-color: #111111; }
+  .whatsapp-qr {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    margin: 16px 0 24px;
+  }
+  .whatsapp-qr img {
+    background: #fff;
+    padding: 8px;
+    border: 1px solid rgba(0,0,0,0.1);
+    border-radius: 6px;
+    width: 200px;
+    height: 200px;
+  }
+  .whatsapp-qr .hint {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    color: rgba(0,0,0,0.5);
+    letter-spacing: 0.3px;
+  }
+  .whatsapp-caveat {
+    font-size: 11.5px;
+    color: rgba(0,0,0,0.5);
+    border-top: 1px solid rgba(0,0,0,0.08);
+    padding-top: 14px;
+    margin-top: auto;
+    line-height: 1.55;
+  }
+
+  .chat-body {
+    padding: 24px 28px 12px;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow-y: auto;
+  }
+
+  .chat-head { margin-bottom: 22px; }
+  .chat-title {
+    font-size: 19px;
+    font-weight: 500;
+    letter-spacing: -0.1px;
+    margin: 0 0 6px;
+    color: var(--chat-ink);
+  }
+  .chat-sub {
+    font-size: 13px;
+    color: var(--chat-muted);
+    line-height: 1.55;
+  }
+
+  .chat-label {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    color: var(--chat-accent);
+    margin-bottom: 10px;
+  }
+
+  .chips-wrap { margin-bottom: 16px; }
+  .chips { display: flex; flex-direction: column; }
+  .chip {
+    background: transparent;
+    color: var(--chat-ink);
+    border: 0;
+    border-top: 1px solid var(--chat-line);
+    padding: 11px 0;
+    font-size: 13px;
+    line-height: 1.5;
+    cursor: pointer;
+    text-align: left;
+    font-family: inherit;
+    transition: padding-left 0.18s ease, color 0.18s ease;
+  }
+  .chip:last-child { border-bottom: 1px solid var(--chat-line); }
+  .chip:hover { padding-left: 8px; color: var(--chat-accent); }
+  .chip .stakeholder {
+    display: inline-block;
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 1.2px;
+    text-transform: uppercase;
+    color: var(--chat-muted);
+    margin-right: 10px;
+    min-width: 78px;
+  }
+  .chip .prebuilt-tag {
+    display: block;
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.5px;
+    color: var(--chat-accent);
+    margin-top: 4px;
+    margin-left: 88px;
+    opacity: 0.75;
+  }
+
+  .messages-wrap {
+    flex: 1;
+    overflow-y: auto;
+    min-height: 0;
+    padding-bottom: 8px;
+  }
+
+  .msg {
+    padding: 14px 16px;
+    margin: 12px 0;
+    border-radius: 8px;
+    word-wrap: break-word;
+    font-size: 14.5px;
+    line-height: 1.65;
+  }
+  .msg.user {
+    background: var(--chat-user-bg);
+    white-space: pre-wrap;
+    font-weight: 400;
+    color: var(--chat-ink);
+    margin-left: 36px;
+  }
+  .msg.user::before {
+    content: 'You';
+    display: block;
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    color: var(--chat-accent);
+    margin-bottom: 6px;
+  }
+  .msg.bot {
+    background: transparent;
+    color: var(--chat-ink);
+    padding: 14px 0;
+    margin: 14px 0;
+  }
+  .msg.bot::before {
+    content: 'Claude';
+    display: block;
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    color: var(--chat-accent);
+    margin-bottom: 8px;
+  }
+  .msg.bot p { margin: 8px 0; }
+  .msg.bot h1, .msg.bot h2, .msg.bot h3 {
+    font-size: 15px; font-weight: 500; margin: 14px 0 6px; letter-spacing: -0.1px;
+  }
+  .msg.bot ul, .msg.bot ol { margin: 8px 0; padding-left: 22px; }
+  .msg.bot li { margin: 3px 0; }
+  .msg.bot strong { font-weight: 500; color: #fff; }
+  .msg.bot code {
+    background: var(--chat-surface);
+    padding: 1px 5px;
+    font-size: 0.88em;
+    font-family: var(--mono);
+    color: #e0c58a;
+    border-radius: 3px;
+  }
+  .msg.bot pre {
+    background: var(--chat-surface);
+    color: var(--chat-ink);
+    padding: 14px;
+    overflow-x: auto;
+    font-size: 12.5px;
+    border: 1px solid var(--chat-line);
+    border-radius: 4px;
+    font-family: var(--mono);
+  }
+  .msg.bot pre code { background: transparent; padding: 0; color: inherit; }
+  .msg.bot table {
+    border-collapse: collapse;
+    margin: 12px 0;
+    font-size: 13px;
+    width: 100%;
+    display: block;
+    overflow-x: auto;
+  }
+  .msg.bot th, .msg.bot td {
+    border-top: 1px solid var(--chat-line);
+    padding: 8px 12px 8px 0;
+    text-align: left;
+  }
+  .msg.bot th {
+    font-weight: 500;
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 1.2px;
+    text-transform: uppercase;
+    color: var(--chat-muted);
+    border-bottom: 1px solid var(--chat-line-strong);
+    border-top: 0;
+  }
+  .msg.bot tr:last-child td { border-bottom: 1px solid var(--chat-line); }
+
+  .files { margin: 10px 0 2px; display: flex; flex-wrap: wrap; gap: 8px; }
+  .file-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--chat-surface);
+    border: 1px solid var(--chat-line-strong);
+    padding: 8px 12px;
+    font-size: 12.5px;
+    text-decoration: none;
+    color: var(--chat-ink);
+    font-family: inherit;
+    border-radius: 4px;
+  }
+  .file-link:hover { border-color: var(--chat-accent); }
+  .file-link .fsize { color: var(--chat-muted); font-size: 11px; }
+
+  .thinking {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 0;
+  }
+  .thinking .dot {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    background: var(--chat-accent);
+    border-radius: 50%;
+    animation: pulse 1.2s infinite ease-in-out;
+  }
+  @keyframes pulse { 0%, 80%, 100% { opacity: 0.2; } 40% { opacity: 1; } }
+  .thinking .timer {
+    font-family: var(--mono);
+    font-weight: 500;
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
+    color: var(--chat-ink);
+  }
+  .thinking .thinking-label {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    color: var(--chat-muted);
+  }
+  .err { color: #ff8a8a; }
+
+  /* Input bar — pill-shaped, clearly a chat */
+  .chat-inputbar {
+    padding: 16px 20px 20px;
+    background: linear-gradient(to top, var(--chat-bg) 60%, rgba(15,17,21,0));
+    border-top: 1px solid var(--chat-line);
+  }
+  form {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    background: var(--chat-surface-2);
+    border: 1px solid var(--chat-line-strong);
+    border-radius: 999px;
+    padding: 6px 8px 6px 20px;
+    transition: border-color 0.15s ease;
+  }
+  form:focus-within {
+    border-color: var(--chat-accent);
+  }
+  input {
+    flex: 1;
+    padding: 10px 0;
+    font-size: 14.5px;
+    border: 0;
+    background: transparent;
+    color: var(--chat-ink);
+    font-family: inherit;
+    outline: none;
+  }
+  input::placeholder { color: var(--chat-muted); }
+  button.send-btn {
+    padding: 10px 18px 10px 20px;
+    background: var(--chat-accent);
+    color: #0f1115;
+    border: 0;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    cursor: pointer;
+    font-family: inherit;
+    border-radius: 999px;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    transition: background 0.15s ease;
+  }
+  button.send-btn:hover { background: #d6b879; }
+  button.send-btn:disabled { opacity: 0.4; cursor: wait; }
+  button.send-btn .send-arrow { font-size: 15px; line-height: 1; }
+
+  @media (max-width: 980px) {
+    .hero-band { height: 80vh; }
+    .hero-h1 { font-size: 44px; line-height: 1.15; }
+    .hero-sub { font-size: 15px; }
+    .uptitle { margin-bottom: 20px; font-size: 12px; }
+    .two-col {
+      grid-template-columns: 1fr;
+      gap: 56px;
+      padding: 48px 24px 80px;
+    }
+    .right-col {
+      position: static;
+      max-height: none;
+    }
+    .book-stats { grid-template-columns: repeat(2, 1fr); }
+  }
+
+  .back-link {
+    position: absolute;
+    top: 28px;
+    left: 32px;
+    z-index: 10;
+    font-family: var(--sans);
+    font-size: 13px;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    color: rgba(255,255,255,0.85);
+    text-decoration: none;
+    padding: 8px 14px;
+    border: 1px solid rgba(255,255,255,0.3);
+    border-radius: 999px;
+    backdrop-filter: blur(6px);
+    background: rgba(0,0,0,0.2);
+    transition: background 0.15s ease, border-color 0.15s ease;
+  }
+  .back-link:hover { background: rgba(0,0,0,0.4); border-color: rgba(255,255,255,0.6); }
+  @media (max-width: 600px) {
+    .back-link { top: 14px; left: 14px; font-size: 11px; padding: 6px 10px; }
+  }
+
+  /* Shared dark footer — matches portfolio site */
+  .site-footer {
+    background: #0d0d0d;
+    color: #c6c6c6;
+    padding: 60px 20px 75px;
+    text-align: center;
+    font-family: var(--sans);
+  }
+  .site-footer__text {
+    max-width: 600px;
+    margin: 0 auto;
+    font-size: 13px;
+    line-height: 1.8;
+  }
+  .site-footer__text a {
+    color: #c6c6c6;
+    text-decoration: underline;
+  }
+  .site-footer__text a:hover { color: #fff; }
+  .site-footer__open-to {
+    display: inline-block;
+    margin-top: 6px;
+    font-size: 12px;
+    color: rgba(198,198,198,0.75);
+    max-width: 540px;
+  }
+</style>
+</head>
+<body>
+
+<section class="hero-band">
+  <a href="/" class="back-link">← Back to main page</a>
+  <div class="hero-inner">
+    <div class="uptitle" id="hero-uptitle"></div>
+    <h1 class="hero-h1" id="hero-h1"></h1>
+    <p class="hero-sub" id="hero-sub"></p>
+    <div class="hero-stats" id="hero-stats"></div>
+  </div>
+</section>
+
+<main class="two-col">
+
+  <div class="left-col">
+
+    <section>
+      <div class="section-label" id="what-label"></div>
+      <h2 class="section-h" id="what-h"></h2>
+      <p id="what-body"></p>
+    </section>
+
+    <section>
+      <div class="section-label" id="whymatters-label"></div>
+      <h2 class="section-h" id="whymatters-h"></h2>
+      <p id="whymatters-body"></p>
+      <div class="whymatters-stats" id="whymatters-stats"></div>
+    </section>
+
+    <section>
+      <div class="section-label" id="who-label"></div>
+      <h2 class="section-h" id="who-h"></h2>
+      <p id="who-body"></p>
+    </section>
+
+    <section>
+      <div class="section-label" id="why-label"></div>
+      <h2 class="section-h" id="why-h"></h2>
+      <p id="why-body" style="margin: 0 0 20px; color: var(--muted, rgba(255,255,255,0.7));"></p>
+      <ol id="why-points"></ol>
+    </section>
+
+    <section>
+      <div class="section-label" id="book-label"></div>
+      <h2 class="section-h" id="book-h"></h2>
+      <div id="book-body-1"></div>
+      <p id="book-body-2"></p>
+    </section>
+
+    <section>
+      <div class="section-label" id="howbuilt-label"></div>
+      <h2 class="section-h" id="howbuilt-h"></h2>
+      <p id="howbuilt-body"></p>
+    </section>
+
+    <section>
+      <a href="#chat" class="cta-give-it-a-try" id="cta-link"></a>
+    </section>
+
+  </div>
+
+  <div class="right-col-wrap" id="chat">
+    <div class="channel-tabs" id="channel-tabs">
+      <button type="button" class="channel-tab channel-tab--active" data-channel="web">Web chat</button>
+      <button type="button" class="channel-tab" data-channel="whatsapp">WhatsApp</button>
+      <button type="button" class="channel-tab" data-channel="sms">SMS</button>
+    </div>
+    <aside class="right-col">
+    <div class="chat-topbar">
+      <div class="chat-topbar-left">
+        <div class="chat-dots"><span></span><span></span><span></span></div>
+        <div class="chat-topbar-title" id="chat-topbar-title"></div>
+      </div>
+      <div class="chat-status"><span class="live-dot"></span><span id="chat-status-text"></span></div>
+    </div>
+
+    <div class="chat-body">
+      <div class="chat-head">
+        <div class="chat-title" id="chat-title"></div>
+        <div class="chat-sub" id="chat-sub"></div>
+      </div>
+
+      <div class="chips-wrap" id="chips-wrap">
+        <div class="chat-label" id="chips-label"></div>
+        <div class="chips" id="chips"></div>
+      </div>
+
+      <div class="messages-wrap">
+        <div id="messages"></div>
+      </div>
+    </div>
+
+    <div class="chat-inputbar" id="chat-inputbar">
+      <form id="f">
+        <input id="q" autocomplete="off" autofocus />
+        <button id="send" type="submit" class="send-btn">
+          <span id="send-label"></span>
+          <span class="send-arrow">→</span>
+        </button>
+      </form>
+    </div>
+
+    <div class="whatsapp-panel" id="whatsapp-panel">
+      <h3>Try it on WhatsApp</h3>
+      <p>Same chatbot, same data, delivered to your phone</p>
+
+      <div class="wa-step">
+        <div class="wa-step-label">Step 1</div>
+        <div class="wa-step-title">Open the chat</div>
+        <div class="wa-step-hint">Scan the QR or message <strong>+1 415 523 8886</strong> on WhatsApp</div>
+        <div class="whatsapp-qr">
+          <img id="wa-qr" alt="WhatsApp QR code" />
+          <div class="hint">Scan → opens WhatsApp with the join phrase pre-filled</div>
+        </div>
+      </div>
+
+      <div class="wa-step">
+        <div class="wa-step-label">Step 2</div>
+        <div class="wa-step-title">Send the join code</div>
+        <div class="wa-step-hint">Copy and send this as your first message:</div>
+        <div class="whatsapp-code">
+          <code id="wa-join-code">join disappear-grass</code>
+          <button type="button" class="wa-copy-btn" data-copy="join disappear-grass">Copy</button>
+        </div>
+      </div>
+
+      <div class="wa-step">
+        <div class="wa-step-label">Step 3</div>
+        <div class="wa-step-title">Send your question</div>
+        <div class="wa-step-hint">Copy this example, or send any other question about payments:</div>
+        <div class="whatsapp-code">
+          <code>Cost per approved transaction jumped from $43 to $63 last quarter. What's driving it, and what's the single biggest lever we can pull this quarter to solve this?</code>
+          <button type="button" class="wa-copy-btn" data-copy="Cost per approved transaction jumped from $43 to $63 last quarter. What's driving it, and what's the single biggest lever we can pull this quarter to solve this?">Copy</button>
+        </div>
+        <div class="wa-step-hint" style="margin-top:10px;margin-bottom:0;">Replies arrive in 2–3 minutes. Follow-up questions keep context from earlier messages</div>
+      </div>
+
+      <div class="whatsapp-caveat">
+        Messages are logged and rate-limited to 10/min per sender
+      </div>
+    </div>
+
+    <div class="sms-panel" id="sms-panel">
+      <h3>Try it on SMS (Canadian numbers only)</h3>
+      <p>Same chatbot over plain text message — no app needed. Works from Canadian mobile numbers; US and international SMS are blocked by carrier regulation, so use WhatsApp or web chat for those</p>
+
+      <div class="wa-step">
+        <div class="wa-step-label">Step 1</div>
+        <div class="wa-step-title">Text the number</div>
+        <div class="wa-step-hint">Scan the QR or open SMS and message:</div>
+        <div class="whatsapp-code">
+          <code>+1 604 757 0585</code>
+          <button type="button" class="wa-copy-btn" data-copy="+16047570585">Copy</button>
+        </div>
+        <div class="whatsapp-qr">
+          <img id="sms-qr" alt="SMS QR code" />
+          <div class="hint">Scan → opens SMS with the number + example question pre-filled</div>
+        </div>
+      </div>
+
+      <div class="wa-step">
+        <div class="wa-step-label">Step 2</div>
+        <div class="wa-step-title">Send your question</div>
+        <div class="wa-step-hint">Copy this example, or send any other question about payments:</div>
+        <div class="whatsapp-code">
+          <code>Cost per approved transaction jumped from $43 to $63 last quarter. What's driving it, and what's the single biggest lever we can pull this quarter to solve this?</code>
+          <button type="button" class="wa-copy-btn" data-copy="Cost per approved transaction jumped from $43 to $63 last quarter. What's driving it, and what's the single biggest lever we can pull this quarter to solve this?">Copy</button>
+        </div>
+        <div class="wa-step-hint" style="margin-top:10px;margin-bottom:0;">Replies arrive in 2–3 minutes. Follow-up questions keep context from earlier messages</div>
+      </div>
+
+      <div class="whatsapp-caveat">
+        Messages are logged and rate-limited; capped at 20/day
+      </div>
+    </div>
+    </aside>
+  </div>
+
+</main>
+
+<footer class="site-footer">
+  <div class="site-footer__text">
+    Ivan Antonov
+    <br>
+    <span class="site-footer__open-to">Open to Solutions/Pre-sales Engineer, Product Manager and (Technical) Program Manager roles in Vancouver, Toronto or US remote</span>
+    <br><br>
+    <a href="mailto:ivan.antonov@outlook.com">ivan.antonov@outlook.com</a> &nbsp;·&nbsp;
+    <a href="/">ivanantonov.com</a> &nbsp;·&nbsp;
+    <a href="https://www.linkedin.com/in/ivanantonov/" target="_blank" rel="noopener">LinkedIn</a> &nbsp;·&nbsp;
+    <a href="https://github.com/ivanpayments/payment-chatbot" target="_blank" rel="noopener">GitHub</a> &nbsp;·&nbsp;
+    <a href="/assets/Antonov_CV.pdf" target="_blank" rel="noopener">Resume</a>
+    <br><br>
+    &copy; 2026 Ivan Antonov. All rights reserved
+  </div>
+</footer>
+
+<script>
+let CONTENT = null;
+let YOU_LABEL = 'You';
+let CLAUDE_LABEL = 'Claude';
+let THINKING_LABEL = 'Claude is thinking…';
+
+const messagesEl = document.getElementById("messages");
+const chipsEl = document.getElementById("chips");
+const chipsWrapEl = document.getElementById("chips-wrap");
+const form = document.getElementById("f");
+const input = document.getElementById("q");
+const sendBtn = document.getElementById("send");
+const messagesWrap = document.querySelector(".messages-wrap");
+const history = [];
+
+function el(id) { return document.getElementById(id); }
+
+async function loadContent() {
+  const resp = await fetch("content.json", { cache: "no-cache" });
+  CONTENT = await resp.json();
+  renderContent();
+}
+
+function renderContent() {
+  const c = CONTENT;
+
+  el("hero-uptitle").textContent = c.hero.uptitle || "";
+  el("hero-uptitle").style.display = c.hero.uptitle ? "" : "none";
+  el("hero-h1").textContent = c.hero.h1;
+  el("hero-sub").textContent = c.hero.sub;
+  document.title = c.hero.h1;
+
+  const heroStatsEl = el("hero-stats");
+  heroStatsEl.innerHTML = "";
+  if (c.hero.stats && c.hero.stats.length) {
+    c.hero.stats.forEach(s => {
+      const d = document.createElement("div");
+      d.innerHTML = `<div class="k">${s.k}</div><div class="v">${s.v}</div>`;
+      heroStatsEl.appendChild(d);
+    });
+    heroStatsEl.style.display = "";
+  } else {
+    heroStatsEl.style.display = "none";
+  }
+
+  el("what-label").textContent = c.section_what.label;
+  el("what-h").textContent = c.section_what.heading;
+  el("what-body").innerHTML = c.section_what.body;
+
+  if (c.section_whymatters) {
+    el("whymatters-label").textContent = c.section_whymatters.label;
+    el("whymatters-h").textContent = c.section_whymatters.heading;
+    el("whymatters-body").innerHTML = c.section_whymatters.body;
+    const wmStatsEl = el("whymatters-stats");
+    wmStatsEl.innerHTML = "";
+    if (c.section_whymatters.stats && c.section_whymatters.stats.length) {
+      c.section_whymatters.stats.forEach(s => {
+        const d = document.createElement("div");
+        d.innerHTML = `<div class="k">${s.k}</div><div class="v">${s.v}</div>`;
+        wmStatsEl.appendChild(d);
+      });
+      wmStatsEl.style.display = "";
+    } else {
+      wmStatsEl.style.display = "none";
+    }
+  }
+
+  if (c.section_howbuilt) {
+    el("howbuilt-label").textContent = c.section_howbuilt.label;
+    el("howbuilt-h").textContent = c.section_howbuilt.heading;
+    el("howbuilt-body").innerHTML = c.section_howbuilt.body;
+  }
+
+  el("book-label").textContent = c.section_book.label;
+  el("book-h").textContent = c.section_book.heading;
+  el("book-body-1").innerHTML = c.section_book.body_after_stats;
+  el("book-body-2").innerHTML = c.section_book.body_synthetic;
+
+  el("who-label").textContent = c.section_who.label;
+  el("who-h").textContent = c.section_who.heading;
+  el("who-body").innerHTML = c.section_who.body;
+
+  el("why-label").textContent = c.section_why.label;
+  el("why-h").textContent = c.section_why.heading;
+  const whyBodyEl = el("why-body");
+  if (whyBodyEl) {
+    whyBodyEl.innerHTML = c.section_why.body || "";
+    whyBodyEl.style.display = c.section_why.body ? "" : "none";
+  }
+  const ol = el("why-points");
+  ol.innerHTML = "";
+  c.section_why.points.forEach(p => {
+    const li = document.createElement("li");
+    li.innerHTML = p;
+    ol.appendChild(li);
+  });
+
+  const cta = el("cta-link");
+  cta.innerHTML = `${c.cta.text} <span class="arrow">${c.cta.arrow}</span>`;
+
+  el("chat-topbar-title").textContent = "chat.py";
+  el("chat-status-text").textContent = "Live";
+  el("chat-title").textContent = c.chat.title;
+  el("chat-sub").textContent = c.chat.sub;
+  el("chips-label").textContent = c.chat.chips_label;
+
+  const chipsContainer = el("chips");
+  chipsContainer.innerHTML = "";
+  c.chat.chips.forEach(ch => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "chip";
+    btn.dataset.question = ch.question;
+    const tag = ch.prebuilt
+      ? '<span class="prebuilt-tag">Sample answer — replies instantly</span>'
+      : '';
+    btn.innerHTML = `<span class="stakeholder">${ch.stakeholder}</span>${ch.question}${tag}`;
+    chipsContainer.appendChild(btn);
+  });
+
+  input.placeholder = c.chat.placeholder;
+  el("send-label").textContent = c.chat.send_label;
+  YOU_LABEL = c.chat.you_label || 'You';
+  CLAUDE_LABEL = c.chat.claude_label || 'Claude';
+  THINKING_LABEL = c.chat.thinking_label || 'Claude is thinking…';
+
+  const style = document.createElement("style");
+  style.textContent = `
+    .msg.user::before { content: '${YOU_LABEL}'; }
+    .msg.bot::before { content: '${CLAUDE_LABEL}'; }
+  `;
+  document.head.appendChild(style);
+}
+
+function scrollChat() {
+  if (messagesWrap) messagesWrap.scrollTop = messagesWrap.scrollHeight;
+}
+
+function add(role, text) {
+  const div = document.createElement("div");
+  div.className = "msg " + role;
+  div.textContent = text;
+  messagesEl.appendChild(div);
+  scrollChat();
+  return div;
+}
+
+function addThinking() {
+  const div = document.createElement("div");
+  div.className = "msg bot thinking";
+  div.innerHTML = `<span class="dot"></span><span class="timer">0s</span> <span class="thinking-label">${THINKING_LABEL}</span>`;
+  messagesEl.appendChild(div);
+  scrollChat();
+  const timerEl = div.querySelector(".timer");
+  const start = Date.now();
+  div._tick = setInterval(() => {
+    timerEl.textContent = Math.round((Date.now() - start) / 1000) + "s";
+  }, 1000);
+  return div;
+}
+
+function stopThinking(el) {
+  if (el && el._tick) { clearInterval(el._tick); el._tick = null; }
+  if (el && el.parentNode) el.remove();
+}
+
+async function ask(q) {
+  if (!q) return;
+  if (chipsWrapEl) chipsWrapEl.style.display = "none";
+  sendBtn.disabled = true;
+  add("user", q);
+  const thinkingEl = addThinking();
+  let botEl = null;
+  let acc = "";
+
+  try {
+    const resp = await fetch("chat", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ message: q, history, turnstile_token: "" }),
+    });
+    if (!resp.ok) throw new Error("HTTP " + resp.status);
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n\n");
+      buffer = lines.pop() || "";
+      for (const line of lines) {
+        if (!line.startsWith("data: ")) continue;
+        const payload = JSON.parse(line.slice(6));
+        if (payload.type === "text") {
+          if (!botEl) {
+            stopThinking(thinkingEl);
+            botEl = add("bot", "");
+          }
+          acc += payload.content;
+          if (window.marked) {
+            botEl.innerHTML = window.marked.parse(acc, { breaks: true, gfm: true });
+          } else {
+            botEl.textContent = acc;
+          }
+          scrollChat();
+        } else if (payload.type === "file") {
+          if (!botEl) {
+            stopThinking(thinkingEl);
+            botEl = add("bot", "");
+          }
+          let filesEl = botEl.querySelector(".files");
+          if (!filesEl) {
+            filesEl = document.createElement("div");
+            filesEl.className = "files";
+            botEl.appendChild(filesEl);
+          }
+          const a = document.createElement("a");
+          a.className = "file-link";
+          a.href = payload.url;
+          a.download = payload.filename;
+          const kb = payload.size ? (payload.size / 1024).toFixed(1) + " KB" : "";
+          a.innerHTML = '<span>\u2b07 ' + payload.filename + '</span>' + (kb ? '<span class="fsize">' + kb + '</span>' : '');
+          filesEl.appendChild(a);
+          scrollChat();
+        } else if (payload.type === "error") {
+          stopThinking(thinkingEl);
+          const errEl = add("bot", "Error: " + payload.content);
+          errEl.className = "msg err";
+        }
+      }
+    }
+    stopThinking(thinkingEl);
+    history.push({ role: "user", content: q });
+    history.push({ role: "assistant", content: acc });
+  } catch (err) {
+    stopThinking(thinkingEl);
+    const errEl = add("bot", "Error: " + err.message);
+    errEl.className = "msg err";
+  } finally {
+    sendBtn.disabled = false;
+    input.focus();
+  }
+}
+
+form.addEventListener("submit", (e) => {
+  e.preventDefault();
+  const q = input.value.trim();
+  input.value = "";
+  ask(q);
+});
+
+chipsEl.addEventListener("click", (e) => {
+  const btn = e.target.closest(".chip");
+  if (!btn) return;
+  const q = btn.dataset.question || btn.textContent.trim();
+  ask(q);
+});
+
+loadContent().catch(err => {
+  console.error("content load failed", err);
+});
+
+// --- Channel toggle (Web chat / WhatsApp) ---
+const WA_NUMBER = "14155238886";
+const WA_JOIN_PHRASE = "join disappear-grass";
+const waDeeplink = `https://wa.me/${WA_NUMBER}?text=${encodeURIComponent(WA_JOIN_PHRASE)}`;
+const waQrImg = document.getElementById("wa-qr");
+if (waQrImg) {
+  waQrImg.src = `https://api.qrserver.com/v1/create-qr-code/?size=360x360&margin=0&data=${encodeURIComponent(waDeeplink)}`;
+}
+
+document.querySelectorAll(".wa-copy-btn").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    const text = btn.dataset.copy || "";
+    navigator.clipboard.writeText(text).then(() => {
+      const prev = btn.textContent;
+      btn.textContent = "Copied";
+      setTimeout(() => { btn.textContent = prev; }, 1500);
+    });
+  });
+});
+
+// SMS QR → opens SMS app with number + example body pre-filled
+const SMS_NUMBER = "+16047570585";
+const SMS_EXAMPLE = "Cost per approved transaction jumped from $43 to $63 last quarter. What's driving it, and what's the single biggest lever we can pull this quarter to solve this?";
+const smsDeeplink = `sms:${SMS_NUMBER}?body=${encodeURIComponent(SMS_EXAMPLE)}`;
+const smsQrImg = document.getElementById("sms-qr");
+if (smsQrImg) {
+  smsQrImg.src = `https://api.qrserver.com/v1/create-qr-code/?size=360x360&margin=0&data=${encodeURIComponent(smsDeeplink)}`;
+}
+
+const channelTabs = document.getElementById("channel-tabs");
+const chatBodyEl = document.querySelector(".chat-body");
+const chatInputBarEl = document.getElementById("chat-inputbar");
+const chatTopbarEl = document.querySelector(".chat-topbar");
+const whatsappPanelEl = document.getElementById("whatsapp-panel");
+const smsPanelEl = document.getElementById("sms-panel");
+if (channelTabs) {
+  channelTabs.addEventListener("click", (e) => {
+    const btn = e.target.closest(".channel-tab");
+    if (!btn) return;
+    channelTabs.querySelectorAll(".channel-tab").forEach(b => b.classList.toggle("channel-tab--active", b === btn));
+    const ch = btn.dataset.channel;
+    const isWeb = ch === "web";
+    if (chatTopbarEl) chatTopbarEl.style.display = isWeb ? "" : "none";
+    if (chatBodyEl) chatBodyEl.style.display = isWeb ? "" : "none";
+    if (chatInputBarEl) chatInputBarEl.style.display = isWeb ? "" : "none";
+    if (whatsappPanelEl) whatsappPanelEl.style.display = ch === "whatsapp" ? "flex" : "none";
+    if (smsPanelEl) smsPanelEl.style.display = ch === "sms" ? "flex" : "none";
+  });
+}
+</script>
+</body>
+</html>

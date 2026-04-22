@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+*.egg-info/
+
+# Environment
+.env
+.env.local
+
+# Logs / generated
+*.log
+app/generated/
+static/hero.jpg.bak
+
+# Data — transactions.csv is 116 MB, over GitHub's 100 MB per-file limit.
+# Regenerate with: python "Claude files/generate_transactions.py"
+Claude files/transactions.csv
+Claude files/research/_drafts/
+
+# Yuno data — must stay out of this repo
+*yuno*
+*Yuno*
+
+# OS
+.DS_Store
+Thumbs.db
