@@ -62,7 +62,7 @@ class Limits:
         if self._budget_path.exists():
             try:
                 return json.loads(self._budget_path.read_text())
-            except Exception:
+            except (json.JSONDecodeError, OSError):
                 return {}
         return {}
 

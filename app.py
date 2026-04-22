@@ -37,7 +37,7 @@ def verify_turnstile(token: str, ip: str) -> bool:
             timeout=5.0,
         )
         return bool(resp.json().get("success"))
-    except Exception:
+    except (httpx.HTTPError, ValueError, KeyError):
         return False
 
 load_dotenv()
@@ -387,6 +387,12 @@ SMS_HISTORY: dict[str, list] = {}
 WA_MAX_LEN = 20
 WA_CHUNK_LIMIT = 1500
 
+
+def _trim_history(hist: list, max_len: int = WA_MAX_LEN) -> None:
+    """Keep at most ``max_len`` messages in-place, dropping the oldest."""
+    if len(hist) > max_len:
+        del hist[: len(hist) - max_len]
+
 SMS_DAILY_LIMIT = int(os.getenv("SMS_DAILY_LIMIT", "20"))
 _sms_day = {"date": None, "count": 0, "notified": False}
 
@@ -480,8 +486,7 @@ def _twilio_process(request_id: str, from_phone: str, user_text: str) -> None:
             hist = history.setdefault(from_phone, [])
             hist.append({"role": "user", "content": user_text})
             hist.append({"role": "assistant", "content": prebuilt})
-            if len(hist) > WA_MAX_LEN:
-                del hist[: len(hist) - WA_MAX_LEN]
+            _trim_history(hist)
             req_counter.labels(outcome="prebuilt").inc()
             log.info(f"{channel} prebuilt",
                      extra={"request_id": request_id, "ip": from_phone,
@@ -495,8 +500,7 @@ def _twilio_process(request_id: str, from_phone: str, user_text: str) -> None:
             return
 
         hist = history.setdefault(from_phone, [])
-        if len(hist) > WA_MAX_LEN:
-            del hist[: len(hist) - WA_MAX_LEN]
+        _trim_history(hist)
 
         parts: list[str] = []
         tokens_in = tokens_out = 0
@@ -521,6 +525,7 @@ def _twilio_process(request_id: str, from_phone: str, user_text: str) -> None:
         answer = "".join(parts).strip() or "(no response)"
         hist.append({"role": "user", "content": user_text})
         hist.append({"role": "assistant", "content": answer})
+        _trim_history(hist)
         _twilio_send(from_phone, answer)
         req_counter.labels(outcome="ok").inc()
         log.info(f"{channel} ok",
@@ -536,7 +541,7 @@ def _twilio_process(request_id: str, from_phone: str, user_text: str) -> None:
                              "outcome": "error", "channel": channel})
         try:
             _twilio_send(from_phone, f"Sorry, something went wrong: {e}")
-        except Exception:
+        except Exception:  # noqa: BLE001 — best-effort fallback notification on an already-failed path
             pass
 
 
