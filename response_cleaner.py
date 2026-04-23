@@ -58,10 +58,11 @@ _INLINE_ARTEFACT_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Sentence splitter — cheap, good enough for markdown prose. Splits on
-# ".!? " keeping the terminator, and also splits on newlines so a leak in
-# a bullet or heading can be removed cleanly.
-_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+|\n+")
+# Sentence splitter used WITHIN a single line of prose. Keeps the terminator
+# attached to the preceding sentence. Newlines are handled separately — see
+# clean_response — so that markdown structure (headers, tables, bullets,
+# blank-line paragraph breaks) is preserved end-to-end.
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
 
 
 def _is_leak(sentence: str) -> bool:
@@ -74,11 +75,30 @@ def _is_leak(sentence: str) -> bool:
     return False
 
 
+def _scrub_prose_line(line: str) -> str:
+    """Drop leak sentences from a single prose line, keep its indent.
+
+    Returns the scrubbed line (may be empty if every sentence was a leak).
+    Leading whitespace is preserved so bullet/indent structure is kept.
+    """
+    if not line.strip():
+        return line  # blank line — keep as-is (paragraph break)
+    # Preserve leading whitespace; split only the content.
+    stripped = line.lstrip()
+    indent = line[: len(line) - len(stripped)]
+    parts = _SENTENCE_SPLIT_RE.split(stripped)
+    kept = [p for p in parts if not _is_leak(p)]
+    if not kept:
+        return ""
+    return indent + " ".join(kept)
+
+
 def clean_response(text: str) -> str:
     """Remove scratchpad-leak sentences and inline (thinking: ...) artefacts.
 
-    Preserves markdown tables, code fences, and bullet structure — splits only
-    outside fenced code blocks to avoid mangling pandas output.
+    Preserves markdown tables, code fences, headers, bullets, and blank-line
+    paragraph breaks. Leak scrubbing runs sentence-by-sentence WITHIN a line,
+    never across newlines — so structure survives.
     """
     if not text:
         return text
@@ -88,22 +108,25 @@ def clean_response(text: str) -> str:
 
     # Skip scrubbing inside fenced code blocks. Walk block-by-block.
     out_chunks: list[str] = []
-    in_code = False
     for block in re.split(r"(```[\s\S]*?```)", text):
         if block.startswith("```"):
             out_chunks.append(block)
             continue
-        # Non-code block — split into sentences/lines, drop leaky ones.
-        parts = _SENTENCE_SPLIT_RE.split(block)
-        kept: list[str] = [p for p in parts if not _is_leak(p)]
-        # Rejoin with a single space — the original spacing is lost, but the
-        # model outputs markdown where that's fine.
-        out_chunks.append(" ".join(kept))
+        # Non-code block — scrub line-by-line so newlines, table rows,
+        # headers, and bullets are preserved. If a whole line was a leak,
+        # drop it (but keep blank lines so paragraphs don't merge).
+        scrubbed_lines: list[str] = []
+        for line in block.split("\n"):
+            scrubbed = _scrub_prose_line(line)
+            if scrubbed or not line.strip():
+                scrubbed_lines.append(scrubbed)
+        out_chunks.append("\n".join(scrubbed_lines))
 
     cleaned = "".join(out_chunks)
     # Collapse runs of 3+ newlines left by removed sentences into a max of 2.
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
-    # Collapse double spaces that the rejoin can create.
+    # Collapse double spaces on prose lines (but leave table separator rows
+    # like `|---|---|` alone — they don't have runs of spaces anyway).
     cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
     return cleaned.strip()
 

@@ -79,7 +79,9 @@ When a user asks a question:
 
 **2. `query_routing_intelligence`** when the user asks WHICH PROVIDER/ARCHETYPE/ACQUIRER to route a transaction to — "where should we send…", "best acquirer for…", "route options for…". Call with country, amount, and any details given (currency, card brand/type, cross-border issuer, 3DS). The tool returns provider ARCHETYPE names (e.g. `regional-card-specialist-a`, `global-acquirer-b`) from a live simulator — these are archetype labels, NOT real-world PSP brand names. Never map them to any real-world PSP brand. Present the recommended archetype, cite approval rate and p50 latency, show the top 3. On `error: true`, relay the `error_message` plainly and do NOT fabricate a ranking. Do not mix CSV-book questions (historical) with routing questions (forward-looking) — they are distinct data sources.
 
-**3. `code_execution` LAST** — only for ad-hoc queries that neither deterministic tool covers. For any multi-step answer (two or more filters or groupbys), show the pandas snippet that produced the table below the table (fenced code block, ≤10 lines). If the logic doesn't fit in 10 lines, break the question up and ask the user which sub-question to prioritise.
+**3. `code_execution`** — for ad-hoc queries that neither deterministic tool covers. For any multi-step answer (two or more filters or groupbys), show the pandas snippet that produced the table below the table (fenced code block, ≤10 lines). If the logic doesn't fit in 10 lines, break the question up and ask the user which sub-question to prioritise.
+
+**4. `web_search`** — for EXTERNAL benchmarks, industry averages, comparisons to other companies, regulatory/scheme-operator citations, or any claim whose source is NOT in this CSV. Use it when the user asks "how does our X compare to [industry / other SaaS / peers]", "what's the typical Y", "what does [regulator / scheme] say about Z". When `web_search` fires, the assistant MUST cite the source URL(s) inline (the tool returns URLs in `web_search_result_location` citation blocks — surface them as markdown links). If `web_search` returns no credible source, say "no credible public benchmark available" — do NOT fabricate a number. Preferred sources for payments/fintech benchmarks: industry analysts (McKinsey, Forrester, Gartner published reports), scheme operators (Visa, Mastercard published reports), and vetted trade press (PYMNTS.com, American Banker). De-prefer low-quality blogspam and vendor marketing pages. Combine external (web_search) and internal (metrics_tool / code_execution) in a single answer when the question needs both — e.g. "compare to industry" + "and what's our weakest slice".
 
 ---
 
@@ -92,7 +94,7 @@ When a user asks a question:
 
 **If you don't know, say so.** When the data doesn't support the answer, or the tool returns an error, say "I don't have enough data" (or "the dataset doesn't cover that") in one sentence. Do NOT fill gaps with benchmarks, industry averages, or plausible-looking estimates. A short refusal beats a confident fabrication.
 
-**No external benchmarks or anchors.** Do not cite "industry benchmark", "typical merchant", "best-in-class", "industry average", or any external approval-rate range unless the user provides the citation. Do not extrapolate dataset figures to ARR, annual revenue, or book-level volume — the dataset is a snapshot, it does not contain an ARR line item. Ground every "so what" in the dataset itself ("every 1 pp on this slice = $X").
+**External benchmarks require a citation.** Do NOT cite "industry benchmark", "typical merchant", "best-in-class", "industry average", or any external approval-rate range from memory. If the user asks for one, run `web_search` and surface the URL + publication inline in the answer (e.g. "SaaS payment approval rates typically fall in the 84-92% range, per [source title](URL)"). Uncited external claims are stripped by the guardrail layer. Do not extrapolate dataset figures to ARR, annual revenue, or book-level volume — the dataset is a snapshot, it does not contain an ARR line item. Ground every "so what" in the dataset itself ("every 1 pp on this slice = $X").
 
 **Retry-metric discipline.** When a question uses the words "retry", "recovery", or asks about soft-decline follow-ups, the `metrics_tool` answers it directly — call it, then state the chosen definition in ONE line before the table ("attempt-level retry approval rate" OR "subscription-level recovery"). If a cell cannot be computed deterministically, print "n/a" in that cell — NEVER fill it with an estimate.
 
@@ -200,6 +202,28 @@ class ChatAgent:
 
         tools = [
             {"type": "code_execution_20250825", "name": "code_execution"},
+            # Anthropic-hosted web search for external benchmarks / industry
+            # comparisons. GA as of 2025-03-05; no beta header required.
+            # max_uses caps runaway search loops at 3 per turn. Billed at
+            # $10 / 1000 searches; see limits.estimate_cost_usd.
+            {
+                "type": "web_search_20250305",
+                "name": "web_search",
+                "max_uses": 3,
+                "allowed_domains": [
+                    # Industry analysts
+                    "mckinsey.com", "forrester.com", "gartner.com",
+                    "bain.com", "bcg.com", "capgemini.com", "deloitte.com",
+                    # Scheme operators and central banks
+                    "visa.com", "mastercard.com", "americanexpress.com",
+                    "federalreserve.gov", "ecb.europa.eu", "bis.org",
+                    # Vetted trade press
+                    "pymnts.com", "americanbanker.com", "paymentsdive.com",
+                    "thepaypers.com", "finextra.com",
+                    # Regulators / standards
+                    "pcisecuritystandards.org", "emvco.com", "iso.org",
+                ],
+            },
             ROUTING_TOOL_SCHEMA,
             METRICS_TOOL_SCHEMA,
         ]
@@ -208,6 +232,7 @@ class ChatAgent:
         total_out = 0
         total_cache_read = 0
         total_cache_write = 0
+        total_web_search_requests = 0
 
         # Accumulate full raw text across the full turn (spanning tool-use
         # loops) so we can post-process and, if needed, replace the streamed
@@ -264,6 +289,21 @@ class ChatAgent:
                 total_out += getattr(u, "output_tokens", 0) or 0
                 total_cache_read += getattr(u, "cache_read_input_tokens", 0) or 0
                 total_cache_write += getattr(u, "cache_creation_input_tokens", 0) or 0
+                # Track web_search invocations for billing ($10 / 1000).
+                server_use = getattr(u, "server_tool_use", None)
+                if server_use is not None:
+                    total_web_search_requests += (
+                        getattr(server_use, "web_search_requests", 0) or 0
+                    )
+
+                # Surface web_search tool_use blocks to the UI so the user sees
+                # "searching the web for: <query>" while the model pauses.
+                for block in getattr(final, "content", []) or []:
+                    if (getattr(block, "type", None) == "server_tool_use"
+                            and getattr(block, "name", "") == "web_search"):
+                        query = (getattr(block, "input", {}) or {}).get("query", "")
+                        yield {"type": "tool_use", "tool": "web_search",
+                               "query": query}
 
             # Check for client-side tool_use blocks we need to resolve.
             tool_uses = self._extract_client_tool_uses(final)
@@ -310,6 +350,7 @@ class ChatAgent:
             "output_tokens": total_out,
             "cache_read_input_tokens": total_cache_read,
             "cache_creation_input_tokens": total_cache_write,
+            "web_search_requests": total_web_search_requests,
             "tier": tier,
             "model": resolved_model,
         }

@@ -212,15 +212,53 @@ _UNCITED_ANCHOR_RE = re.compile(
     re.IGNORECASE,
 )
 
+# A sentence is considered "cited" if it contains a URL, a markdown link,
+# an explicit "Source:" / "According to" attribution, or a reference to a
+# named published report. When any of these are present, external anchors
+# are allowed through — the web_search tool surfaces URLs this way.
+_CITATION_PRESENT_RE = re.compile(
+    r"("
+    r"https?://[^\s)\]]+|"              # bare URL
+    r"\]\([^)]+\)|"                    # markdown link target
+    r"\bsource\s*[:\-]|"                # "Source:" attribution
+    r"\baccording to\b|"                # "According to X, ..."
+    r"\bper (?:the|a|an)\b|"            # "per the 2024 report"
+    r"\bas reported by\b|"              # "as reported by PYMNTS"
+    r"\b(?:20\d{2})\s+(?:report|survey|study|index|whitepaper|analysis)\b"
+    r")",
+    re.IGNORECASE,
+)
+
+# Pure scale / dataset-size context that's always allowed — talks about
+# our own book, not an external benchmark. Kept narrow so we don't
+# accidentally wave through ARR fabrications.
+_ALLOWED_SCALE_RE = re.compile(
+    r"\b(100[kK]|100,000)\s+(?:row|attempt|billing|record)s?\b|"
+    r"\b(?:our|the)\s+(?:dataset|book|sample)\b",
+    re.IGNORECASE,
+)
+
 _CITATION_DISCLAIMER = (
     "[citation needed — this claim isn't grounded in the 100K-row dataset]"
 )
 
 
+def _sentence_is_cited(sentence: str) -> bool:
+    """True if the sentence carries a URL, markdown link, named-report
+    reference, or explicit 'Source:' / 'According to' attribution."""
+    return bool(_CITATION_PRESENT_RE.search(sentence or ""))
+
+
 def strip_uncited_anchors(text: str) -> str:
     """Replace any sentence containing a banned/uncited anchor with the
-    bracketed disclaimer. Operates sentence-by-sentence outside fenced
-    code blocks so tables and pandas snippets are left alone."""
+    bracketed disclaimer, UNLESS the sentence (or its immediate neighbour
+    in the same paragraph) carries a citation (URL, markdown link,
+    "Source:" / "According to" attribution, or a named report reference).
+    This lets web_search-sourced benchmarks pass through while still
+    stripping uncited fabrications.
+
+    Operates sentence-by-sentence outside fenced code blocks so tables
+    and pandas snippets are left alone."""
     if not text:
         return text
     out_chunks: list[str] = []
@@ -229,10 +267,22 @@ def strip_uncited_anchors(text: str) -> str:
             out_chunks.append(block)
             continue
         parts = _SENTENCE_SPLIT_RE.split(block)
+        # Whole-paragraph citation check: if ANY sentence in the chunk
+        # carries a citation marker, treat the external claim as cited.
+        # (Writers often split "claim." and "Source: X." into two
+        # sentences — we don't want to strip the claim just because the
+        # URL landed in the next sentence.)
+        paragraph_cited = any(_sentence_is_cited(s or "") for s in parts)
         rebuilt: list[str] = []
         for p in parts:
-            if _UNCITED_ANCHOR_RE.search(p or ""):
-                rebuilt.append(_CITATION_DISCLAIMER)
+            s = p or ""
+            if _UNCITED_ANCHOR_RE.search(s):
+                if _ALLOWED_SCALE_RE.search(s):
+                    rebuilt.append(p)
+                elif _sentence_is_cited(s) or paragraph_cited:
+                    rebuilt.append(p)
+                else:
+                    rebuilt.append(_CITATION_DISCLAIMER)
             else:
                 rebuilt.append(p)
         out_chunks.append(" ".join(rebuilt))

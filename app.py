@@ -353,6 +353,12 @@ def chat(req: ChatRequest, request: Request) -> StreamingResponse:
                 elif chunk["type"] == "text":
                     accumulated_text += chunk["content"]
                     yield _sse({"type": "text", "content": chunk["content"]})
+                elif chunk["type"] == "tool_use":
+                    # Forward tool_use notifications so the UI can render
+                    # "Searching the web for: <query>" while the model pauses.
+                    yield _sse({"type": "tool_use",
+                                "tool": chunk.get("tool", ""),
+                                "query": chunk.get("query", "")})
                 elif chunk["type"] == "replace":
                     # Post-processed replacement (e.g. last-N-days trim).
                     last_replace = chunk["content"]
@@ -377,11 +383,13 @@ def chat(req: ChatRequest, request: Request) -> StreamingResponse:
                     tokens_out = chunk["output_tokens"]
                     # Price by the tier the router selected so total-spend
                     # tracking stays correct across Haiku / Sonnet / Opus.
+                    # Add $0.01/web_search call on top (Anthropic billing).
                     cost = estimate_cost_usd(
                         tokens_in, tokens_out,
                         cache_read=chunk["cache_read_input_tokens"],
                         cache_write=chunk["cache_creation_input_tokens"],
                         tier=chunk.get("tier", tier),
+                        web_search_requests=chunk.get("web_search_requests", 0),
                     )
                     limits.add_cost(cost)
                     tok_counter.labels(kind="input").inc(tokens_in)
@@ -637,6 +645,8 @@ def _twilio_process(request_id: str, from_phone: str, user_text: str) -> None:
                     tokens_in, tokens_out,
                     cache_read=chunk["cache_read_input_tokens"],
                     cache_write=chunk["cache_creation_input_tokens"],
+                    tier=chunk.get("tier", "sonnet"),
+                    web_search_requests=chunk.get("web_search_requests", 0),
                 )
                 limits.add_cost(cost)
                 tok_counter.labels(kind="input").inc(tokens_in)

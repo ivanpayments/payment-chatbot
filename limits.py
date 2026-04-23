@@ -40,21 +40,32 @@ PRICE_CACHE_READ_PER_MTOK = MODEL_PRICING[_DEFAULT_TIER]["cache_read"]
 BUDGET_PATH = Path("/opt/chatbot/data/budget.json")
 
 
+# Anthropic web_search pricing: $10 per 1,000 searches = $0.01 per search.
+# Source: platform.claude.com/docs/.../tool-use/web-search-tool (2026-04).
+WEB_SEARCH_PRICE_PER_REQUEST_USD = 0.01
+
+
 def estimate_cost_usd(input_tokens: int, output_tokens: int,
                       cache_read: int = 0, cache_write: int = 0,
-                      tier: str = _DEFAULT_TIER) -> float:
+                      tier: str = _DEFAULT_TIER,
+                      web_search_requests: int = 0) -> float:
     """Estimate USD cost for a single turn. ``tier`` is one of
     ``'haiku' | 'sonnet' | 'opus'``; unknown tiers fall back to Sonnet
     pricing so total-spend tracking stays conservative and never crashes
     on a tier we haven't priced yet.
+
+    ``web_search_requests`` is the count Anthropic reports in
+    ``usage.server_tool_use.web_search_requests`` — billed at
+    $0.01/request on top of token cost.
     """
     prices = MODEL_PRICING.get((tier or "").lower(), MODEL_PRICING[_DEFAULT_TIER])
-    return (
+    token_cost = (
         input_tokens * prices["input"]
         + output_tokens * prices["output"]
         + cache_read * prices["cache_read"]
         + cache_write * prices["cache_write"]
     ) / 1_000_000
+    return token_cost + (web_search_requests * WEB_SEARCH_PRICE_PER_REQUEST_USD)
 
 
 class Limits:
