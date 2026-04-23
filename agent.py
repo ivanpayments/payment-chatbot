@@ -14,6 +14,7 @@ from typing import Iterator
 from anthropic import Anthropic
 
 from metrics_tool import METRICS_TOOL_SCHEMA, dispatch_metrics_tool
+from model_router import OPUS_PREAMBLE, resolve_model
 from response_cleaner import (
     clean_response,
     trim_last_n_days,
@@ -125,6 +126,25 @@ class ChatAgent:
         if self.file_id is None:
             raise RuntimeError("CSV not uploaded — call upload_csv() on startup")
 
+        # Route to the right model tier based on the user's question.
+        # Haiku for cheap lookups, Sonnet default, Opus for multi-hop /
+        # counterfactual / forecast / ambiguous. `FORCE_MODEL` env var
+        # short-circuits classification for testing.
+        tier, resolved_model, tier_label = resolve_model(user_text)
+        log.info("model tier resolved: tier=%s model=%s", tier, resolved_model)
+
+        # Emit a model event so the UI can render the tier badge before
+        # any text streams in. Added as a NEW SSE event type — doesn't
+        # modify existing events.
+        yield {"type": "model", "name": tier_label, "label": tier_label,
+               "tier": tier, "model_id": resolved_model}
+
+        # For the Opus path, prepend a one-sentence notice so the user
+        # isn't surprised by the longer latency. Counts as streamed text
+        # so the guardrail pipeline sees it like any other chunk.
+        if tier == "opus":
+            yield {"type": "text", "content": OPUS_PREAMBLE}
+
         messages: list[dict] = list(history) + [{
             "role": "user",
             "content": [
@@ -152,7 +172,7 @@ class ChatAgent:
 
         for iteration in range(MAX_TOOL_ITERATIONS):
             with self.client.beta.messages.stream(
-                model=MODEL,
+                model=resolved_model,
                 max_tokens=MAX_TOKENS,
                 system=[{
                     "type": "text",
@@ -245,6 +265,8 @@ class ChatAgent:
             "output_tokens": total_out,
             "cache_read_input_tokens": total_cache_read,
             "cache_creation_input_tokens": total_cache_write,
+            "tier": tier,
+            "model": resolved_model,
         }
 
     @staticmethod

@@ -18,22 +18,42 @@ DAILY_BUDGET_USD = 5.00
 # 10 user turns + 10 assistant turns
 SESSION_MSG_CAP = 20
 
-# Claude Opus 4.6 pricing (USD per million tokens)
-PRICE_INPUT_PER_MTOK = 5.0
-PRICE_OUTPUT_PER_MTOK = 25.0
-PRICE_CACHE_WRITE_PER_MTOK = 6.25
-PRICE_CACHE_READ_PER_MTOK = 0.50
+# Per-model pricing (USD per million tokens). Source: Anthropic public
+# list as of 2026-04. Cache write ≈ 1.25x input; cache read ≈ 0.1x input.
+MODEL_PRICING: dict[str, dict[str, float]] = {
+    "haiku":  {"input": 1.0,  "output": 5.0,  "cache_write": 1.25,  "cache_read": 0.10},
+    "sonnet": {"input": 3.0,  "output": 15.0, "cache_write": 3.75,  "cache_read": 0.30},
+    "opus":   {"input": 15.0, "output": 75.0, "cache_write": 18.75, "cache_read": 1.50},
+}
+
+# Backward-compatible default (sonnet). Older callers that don't pass a
+# tier fall back to Sonnet pricing so the budget accountant never crashes.
+_DEFAULT_TIER = "sonnet"
+
+# Legacy constants retained for any external importer — point at Sonnet
+# so existing readings stay in the right order of magnitude.
+PRICE_INPUT_PER_MTOK = MODEL_PRICING[_DEFAULT_TIER]["input"]
+PRICE_OUTPUT_PER_MTOK = MODEL_PRICING[_DEFAULT_TIER]["output"]
+PRICE_CACHE_WRITE_PER_MTOK = MODEL_PRICING[_DEFAULT_TIER]["cache_write"]
+PRICE_CACHE_READ_PER_MTOK = MODEL_PRICING[_DEFAULT_TIER]["cache_read"]
 
 BUDGET_PATH = Path("/opt/chatbot/data/budget.json")
 
 
 def estimate_cost_usd(input_tokens: int, output_tokens: int,
-                      cache_read: int = 0, cache_write: int = 0) -> float:
+                      cache_read: int = 0, cache_write: int = 0,
+                      tier: str = _DEFAULT_TIER) -> float:
+    """Estimate USD cost for a single turn. ``tier`` is one of
+    ``'haiku' | 'sonnet' | 'opus'``; unknown tiers fall back to Sonnet
+    pricing so total-spend tracking stays conservative and never crashes
+    on a tier we haven't priced yet.
+    """
+    prices = MODEL_PRICING.get((tier or "").lower(), MODEL_PRICING[_DEFAULT_TIER])
     return (
-        input_tokens * PRICE_INPUT_PER_MTOK
-        + output_tokens * PRICE_OUTPUT_PER_MTOK
-        + cache_read * PRICE_CACHE_READ_PER_MTOK
-        + cache_write * PRICE_CACHE_WRITE_PER_MTOK
+        input_tokens * prices["input"]
+        + output_tokens * prices["output"]
+        + cache_read * prices["cache_read"]
+        + cache_write * prices["cache_write"]
     ) / 1_000_000
 
 

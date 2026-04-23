@@ -338,8 +338,17 @@ def chat(req: ChatRequest, request: Request) -> StreamingResponse:
         accumulated_text = ""
         last_replace: str | None = None
         try:
+            tier = "sonnet"  # default until the agent emits a model chunk
             for chunk in agent.stream_answer(req.history, req.message):
-                if chunk["type"] == "text":
+                if chunk["type"] == "model":
+                    tier = chunk.get("tier", "sonnet")
+                    yield _sse({
+                        "type": "model",
+                        "name": chunk.get("name", "Sonnet"),
+                        "label": chunk.get("label", "Sonnet"),
+                        "tier": tier,
+                    })
+                elif chunk["type"] == "text":
                     accumulated_text += chunk["content"]
                     yield _sse({"type": "text", "content": chunk["content"]})
                 elif chunk["type"] == "replace":
@@ -357,10 +366,13 @@ def chat(req: ChatRequest, request: Request) -> StreamingResponse:
                 elif chunk["type"] == "usage":
                     tokens_in = chunk["input_tokens"]
                     tokens_out = chunk["output_tokens"]
+                    # Price by the tier the router selected so total-spend
+                    # tracking stays correct across Haiku / Sonnet / Opus.
                     cost = estimate_cost_usd(
                         tokens_in, tokens_out,
                         cache_read=chunk["cache_read_input_tokens"],
                         cache_write=chunk["cache_creation_input_tokens"],
+                        tier=chunk.get("tier", tier),
                     )
                     limits.add_cost(cost)
                     tok_counter.labels(kind="input").inc(tokens_in)
