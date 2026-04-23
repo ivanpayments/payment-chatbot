@@ -11,6 +11,8 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
+import mimetypes
+
 import httpx
 from dotenv import load_dotenv
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
@@ -356,6 +358,13 @@ def chat(req: ChatRequest, request: Request) -> StreamingResponse:
                     last_replace = chunk["content"]
                     yield _sse({"type": "replace", "content": chunk["content"]})
                 elif chunk["type"] == "file":
+                    # Skip entries where the agent failed to download the file
+                    # (size=0 + error set) — don't render a broken link client-side.
+                    if chunk.get("error") or not chunk.get("size"):
+                        log.info("file skipped (error or empty)",
+                                 extra={"request_id": request_id, "ip": ip,
+                                        "outcome": "file_skipped"})
+                        continue
                     yield _sse({
                         "type": "file",
                         "file_id": chunk["file_id"],
@@ -411,14 +420,31 @@ def chat(req: ChatRequest, request: Request) -> StreamingResponse:
 
 @app.get("/files/{file_id}")
 def download_file(file_id: str):
-    if not file_id.replace("_", "").replace("-", "").isalnum():
+    # file_id must be an opaque Anthropic-issued token (alphanumeric +
+    # underscores/dashes only) — rejects directory traversal attempts.
+    if not file_id or not file_id.replace("_", "").replace("-", "").isalnum():
         raise HTTPException(400, "invalid file id")
     matches = list(GENERATED_DIR.glob(f"{file_id}_*"))
     if not matches:
         raise HTTPException(404, "file not found")
-    path = matches[0]
+    path = matches[0].resolve()
+    # Defence-in-depth: ensure the resolved path is still inside GENERATED_DIR.
+    try:
+        path.relative_to(GENERATED_DIR.resolve())
+    except ValueError as exc:
+        raise HTTPException(400, "invalid file path") from exc
     filename = path.name.split("_", 1)[1] if "_" in path.name else path.name
-    return FileResponse(path, filename=filename)
+    mime, _ = mimetypes.guess_type(filename)
+    return FileResponse(
+        path,
+        filename=filename,
+        media_type=mime or "application/octet-stream",
+        headers={
+            # Force a download instead of inline-rendering in the browser.
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 @app.get("/")
@@ -446,6 +472,13 @@ def sample_report():
 @app.get("/architecture.svg")
 def architecture_svg():
     return FileResponse(STATIC_DIR / "architecture.svg", media_type="image/svg+xml")
+
+@app.get("/architecture-tradeoffs.html")
+def architecture_tradeoffs():
+    return FileResponse(
+        STATIC_DIR / "architecture-tradeoffs.html",
+        media_type="text/html",
+    )
 
 # ---------------------------- WhatsApp via Twilio ----------------------------
 

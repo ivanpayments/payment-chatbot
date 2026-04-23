@@ -34,6 +34,10 @@ BETAS = ["files-api-2025-04-14"]
 # Safety cap for client-side tool loop — prevents runaway routing calls.
 MAX_TOOL_ITERATIONS = 4
 
+# Guardrails for files produced by the code_execution sandbox.
+MAX_GENERATED_FILE_BYTES = 10 * 1024 * 1024  # 10 MB per file
+MAX_GENERATED_FILES_PER_TURN = 3
+
 BASE_PROMPT = """# Role
 
 You are the in-house payments analyst for the **Head of Payments / RevOps at a global SaaS**. You have access to ~100K billing attempts representing **one SaaS company's subscription book** via the code_execution tool — the file is attached to the user message; load it with pandas.read_csv on the mounted path.
@@ -360,7 +364,13 @@ class ChatAgent:
 
     def _download_generated_files(self, final_message) -> list[dict]:
         """Scan the final message for file_ids produced by code_execution and pull them
-        out of the ephemeral container into GENERATED_DIR before the container expires."""
+        out of the ephemeral container into GENERATED_DIR before the container expires.
+
+        Guardrails:
+        - Hard-cap MAX_GENERATED_FILES_PER_TURN files per turn (drops any extras).
+        - Reject any individual file larger than MAX_GENERATED_FILE_BYTES.
+        - Normalise filenames via Path(...).name to block directory traversal.
+        """
         out: list[dict] = []
         seen: set[str] = set()
         for block in getattr(final_message, "content", []) or []:
@@ -375,17 +385,37 @@ class ChatAgent:
                 if not fid or fid in seen:
                     continue
                 seen.add(fid)
+                if len(out) >= MAX_GENERATED_FILES_PER_TURN:
+                    log.info("file cap reached, dropping remaining file_id=%s", fid)
+                    continue
                 try:
                     meta = self.client.beta.files.retrieve_metadata(fid)
+                    declared = getattr(meta, "size_bytes", None) or getattr(meta, "size", None)
+                    if declared and declared > MAX_GENERATED_FILE_BYTES:
+                        out.append({"file_id": fid, "filename": "oversize",
+                                    "size": 0,
+                                    "error": f"file exceeds {MAX_GENERATED_FILE_BYTES} bytes"})
+                        continue
                     blob = self.client.beta.files.download(fid)
                     filename = getattr(meta, "filename", None) or f"{fid}.bin"
-                    safe_name = Path(filename).name
+                    safe_name = Path(filename).name or f"{fid}.bin"
                     dest = GENERATED_DIR / f"{fid}_{safe_name}"
                     blob.write_to_file(str(dest))
+                    size = dest.stat().st_size
+                    if size > MAX_GENERATED_FILE_BYTES:
+                        # Defence-in-depth: delete if download exceeds cap.
+                        try:
+                            dest.unlink()
+                        except OSError:
+                            pass
+                        out.append({"file_id": fid, "filename": safe_name,
+                                    "size": 0,
+                                    "error": f"file exceeds {MAX_GENERATED_FILE_BYTES} bytes"})
+                        continue
                     out.append({
                         "file_id": fid,
                         "filename": safe_name,
-                        "size": dest.stat().st_size,
+                        "size": size,
                     })
                 except Exception as exc:
                     out.append({"file_id": fid, "filename": "unknown", "size": 0,

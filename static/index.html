@@ -1262,11 +1262,15 @@ async function ask(q) {
             botEl = add("bot", "");
           }
           acc += payload.content;
+          // Preserve any .files child that may have been appended earlier
+          // in the stream — re-rendering innerHTML would otherwise wipe it.
+          const filesElPreText = botEl.querySelector(".files");
           if (window.marked) {
             botEl.innerHTML = window.marked.parse(acc, { breaks: true, gfm: true });
           } else {
             botEl.textContent = acc;
           }
+          if (filesElPreText) botEl.appendChild(filesElPreText);
           scrollChat();
         } else if (payload.type === "replace") {
           // Post-processed replacement (e.g. last-N-days trim). Overwrite
@@ -1276,11 +1280,15 @@ async function ask(q) {
             botEl = add("bot", "");
           }
           acc = payload.content || "";
+          // Preserve files on replace too — the scrub_response replace can
+          // fire AFTER a file event and would otherwise remove the link.
+          const filesElPreReplace = botEl.querySelector(".files");
           if (window.marked) {
             botEl.innerHTML = window.marked.parse(acc, { breaks: true, gfm: true });
           } else {
             botEl.textContent = acc;
           }
+          if (filesElPreReplace) botEl.appendChild(filesElPreReplace);
           scrollChat();
         } else if (payload.type === "budget") {
           updateBudgetBanner(payload);
