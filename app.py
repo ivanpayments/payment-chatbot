@@ -19,6 +19,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, CollectorRegistry, Counter, G
 from pydantic import BaseModel
 
 from agent import ChatAgent
+from guardrails import scrub_response
 from limits import DAILY_BUDGET_USD, Limits, estimate_cost_usd
 from response_cleaner import out_of_range_refusal
 
@@ -329,12 +330,21 @@ def chat(req: ChatRequest, request: Request) -> StreamingResponse:
         tokens_in = 0
         tokens_out = 0
         cost = 0.0
+        # Accumulate the full text stream so the guardrail pipeline can
+        # verify numeric claims / strip uncited anchors at end-of-turn.
+        # The assistant may also emit its own `replace` chunk mid-stream
+        # (e.g. response_cleaner.trim_last_n_days) — we track the latest
+        # representation and scrub whichever the user ends up seeing.
+        accumulated_text = ""
+        last_replace: str | None = None
         try:
             for chunk in agent.stream_answer(req.history, req.message):
                 if chunk["type"] == "text":
+                    accumulated_text += chunk["content"]
                     yield _sse({"type": "text", "content": chunk["content"]})
                 elif chunk["type"] == "replace":
                     # Post-processed replacement (e.g. last-N-days trim).
+                    last_replace = chunk["content"]
                     yield _sse({"type": "replace", "content": chunk["content"]})
                 elif chunk["type"] == "file":
                     yield _sse({
@@ -357,6 +367,18 @@ def chat(req: ChatRequest, request: Request) -> StreamingResponse:
                     tok_counter.labels(kind="output").inc(tokens_out)
                     cost_counter.inc(cost)
                     budget_gauge.set(limits.budget_remaining_usd())
+            # Run the guardrail pipeline on the final assembled text. If
+            # it materially changes the response (new numeric corrections,
+            # stripped uncited anchors, etc.), emit one more `replace`
+            # SSE so the UI overwrites the displayed body.
+            final_text = last_replace if last_replace is not None else accumulated_text
+            try:
+                scrubbed = scrub_response(final_text, req.message)
+            except Exception:  # noqa: BLE001 — guardrail must not block done
+                log.exception("guardrail scrub failed")
+                scrubbed = final_text
+            if scrubbed and scrubbed != final_text:
+                yield _sse({"type": "replace", "content": scrubbed})
             req_counter.labels(outcome="ok").inc()
             yield _sse({"type": "budget", **_budget_remaining_payload()})
             yield _sse({"type": "done"})
