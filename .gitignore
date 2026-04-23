@@ -16,8 +16,7 @@ static/hero.jpg.bak
 
 # Data — transactions.csv is 116 MB, over GitHub's 100 MB per-file limit.
 # Regenerate with: python "Claude files/generate_transactions.py"
-Claude files/transactions.csv
-Claude files/research/_drafts/
+Claude files/
 
 # Yuno data — must stay out of this repo
 *yuno*

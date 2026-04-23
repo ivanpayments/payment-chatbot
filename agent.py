@@ -13,6 +13,7 @@ from typing import Iterator
 
 from anthropic import Anthropic
 
+from metrics_tool import METRICS_TOOL_SCHEMA, dispatch_metrics_tool
 from response_cleaner import (
     clean_response,
     trim_last_n_days,
@@ -54,6 +55,8 @@ When a user asks a question:
 1. Write concise pandas to answer it (via the `code_execution` tool).
 2. Return a short markdown table plus a **2–3 sentence** takeaway, framed for the Head of Payments (action + revenue/risk at stake).
 3. Be ready for follow-ups — the conversation is stateful.
+
+**Multi-hop metric questions — use `metrics_tool` FIRST.** For any question about retry success, retry recovery, soft-decline recovery, or approval-rate changes over a timeframe, call the `metrics_tool` BEFORE writing free-form pandas. The tool returns deterministic attempt-level AND subscription-level figures with the exact definitions printed alongside — cite the one the user asked for, and show both the rate and the raw counts. Fall back to `code_execution` only when the question does not match one of the tool's metrics (`soft_decline_recovery_rate`, `retry_recovery_by_category`, `approval_drop_causes`). If `metrics_tool` returns `error: true`, relay the `error_message` plainly — do NOT fabricate a replacement number.
 
 **Routing questions.** When the user asks WHICH PROVIDER/ARCHETYPE/ACQUIRER to route a transaction to — or asks "where should we send…", "best acquirer for…", "route options for…" — call the `query_routing_intelligence` tool with country, amount, and any details the user gave (currency, card brand/type, cross-border issuer, 3DS). The tool returns provider ARCHETYPE names (e.g. `regional-card-specialist-a`, `global-acquirer-b`, `cross-border-fx-specialist-b`) from a live simulator — these are archetype labels, NOT real-world PSP brand names. Never map them to Stripe/Adyen/etc. Present the recommended archetype, cite the approval rate and p50 latency, and show the top 3 in a compact table with a 1–2 sentence takeaway. If the tool returns `error: true`, relay the `error_message` plainly and do NOT fabricate a ranking. Do not mix CSV-book questions (historical) with routing questions (forward-looking) — the CSV book and the router are distinct data sources.
 
@@ -133,6 +136,7 @@ class ChatAgent:
         tools = [
             {"type": "code_execution_20250825", "name": "code_execution"},
             ROUTING_TOOL_SCHEMA,
+            METRICS_TOOL_SCHEMA,
         ]
 
         total_in = 0
@@ -212,6 +216,8 @@ class ChatAgent:
                 log.info("client tool call %s: %s", tu["name"], json.dumps(tu["input"])[:200])
                 if tu["name"] == ROUTING_TOOL_SCHEMA["name"]:
                     result = call_routing_api(tu["input"])
+                elif tu["name"] == METRICS_TOOL_SCHEMA["name"]:
+                    result = dispatch_metrics_tool(tu["input"])
                 else:
                     result = {"error": True,
                               "error_message": f"unknown client tool: {tu['name']}"}
@@ -244,7 +250,7 @@ class ChatAgent:
     @staticmethod
     def _extract_client_tool_uses(final_message) -> list[dict]:
         """Return tool_use blocks we should execute client-side."""
-        client_tool_names = {ROUTING_TOOL_SCHEMA["name"]}
+        client_tool_names = {ROUTING_TOOL_SCHEMA["name"], METRICS_TOOL_SCHEMA["name"]}
         out: list[dict] = []
         for block in getattr(final_message, "content", []) or []:
             if getattr(block, "type", None) != "tool_use":
