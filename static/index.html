@@ -733,6 +733,27 @@
   button.send-btn:disabled { opacity: 0.4; cursor: wait; }
   button.send-btn .send-arrow { font-size: 15px; line-height: 1; }
 
+  /* Demo-budget banner — appears only when <80% budget remaining */
+  .budget-banner {
+    display: none;
+    padding: 9px 18px;
+    background: rgba(198,166,104,0.14);
+    border-bottom: 1px solid rgba(198,166,104,0.35);
+    font-family: var(--mono);
+    font-size: 11.5px;
+    letter-spacing: 0.4px;
+    color: var(--chat-accent);
+    text-align: center;
+  }
+  .budget-banner.budget-banner--show { display: block; }
+  .budget-banner.budget-banner--exhausted {
+    background: rgba(255,138,138,0.12);
+    border-bottom-color: rgba(255,138,138,0.45);
+    color: #ff8a8a;
+  }
+  input:disabled { opacity: 0.45; cursor: not-allowed; }
+  form.is-disabled { opacity: 0.75; }
+
   @media (max-width: 980px) {
     .hero-band { height: 80vh; }
     .hero-h1 { font-size: 44px; line-height: 1.15; }
@@ -877,6 +898,8 @@
       <div class="chat-status"><span class="live-dot"></span><span id="chat-status-text"></span></div>
     </div>
 
+    <div class="budget-banner" id="budget-banner"></div>
+
     <div class="chat-body">
       <div class="chat-head">
         <div class="chat-title" id="chat-title"></div>
@@ -1010,7 +1033,49 @@ const form = document.getElementById("f");
 const input = document.getElementById("q");
 const sendBtn = document.getElementById("send");
 const messagesWrap = document.querySelector(".messages-wrap");
+const budgetBannerEl = document.getElementById("budget-banner");
 const history = [];
+let budgetExhausted = false;
+
+function updateBudgetBanner(payload) {
+  if (!budgetBannerEl || !payload) return;
+  const total = payload.budget_total || 65;
+  const remaining = Math.max(0, payload.budget_remaining || 0);
+  const exhausted = !!payload.budget_exhausted;
+  budgetExhausted = exhausted;
+
+  // Show the banner when <= 80% of budget remains, or when exhausted.
+  const shouldShow = exhausted || remaining <= Math.floor(total * 0.8);
+  budgetBannerEl.classList.toggle("budget-banner--show", shouldShow);
+  budgetBannerEl.classList.toggle("budget-banner--exhausted", exhausted);
+
+  if (exhausted) {
+    budgetBannerEl.textContent =
+      "Daily demo budget reached — live analysis resumes tomorrow (00:00 UTC)";
+  } else {
+    budgetBannerEl.textContent =
+      "Demo credit: " + remaining + " of " + total + " queries remaining today";
+  }
+
+  // When budget is exhausted, grey out the input so users don't type into the void.
+  if (input) {
+    input.disabled = exhausted;
+    input.placeholder = exhausted
+      ? "Demo budget reached — try again tomorrow"
+      : (CONTENT && CONTENT.chat ? CONTENT.chat.placeholder : input.placeholder);
+  }
+  if (sendBtn) sendBtn.disabled = exhausted;
+  if (form) form.classList.toggle("is-disabled", exhausted);
+}
+
+async function loadBudget() {
+  try {
+    const resp = await fetch("budget", { cache: "no-cache" });
+    if (!resp.ok) return;
+    const payload = await resp.json();
+    updateBudgetBanner(payload);
+  } catch (_) { /* best-effort, silently skip */ }
+}
 
 function el(id) { return document.getElementById(id); }
 
@@ -1203,6 +1268,22 @@ async function ask(q) {
             botEl.textContent = acc;
           }
           scrollChat();
+        } else if (payload.type === "replace") {
+          // Post-processed replacement (e.g. last-N-days trim). Overwrite
+          // the accumulated body with the cleaned content.
+          if (!botEl) {
+            stopThinking(thinkingEl);
+            botEl = add("bot", "");
+          }
+          acc = payload.content || "";
+          if (window.marked) {
+            botEl.innerHTML = window.marked.parse(acc, { breaks: true, gfm: true });
+          } else {
+            botEl.textContent = acc;
+          }
+          scrollChat();
+        } else if (payload.type === "budget") {
+          updateBudgetBanner(payload);
         } else if (payload.type === "file") {
           if (!botEl) {
             stopThinking(thinkingEl);
@@ -1259,6 +1340,7 @@ chipsEl.addEventListener("click", (e) => {
 loadContent().catch(err => {
   console.error("content load failed", err);
 });
+loadBudget();
 
 // --- Channel toggle (Web chat / WhatsApp) ---
 const WA_NUMBER = "14155238886";

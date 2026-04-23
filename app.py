@@ -20,6 +20,7 @@ from pydantic import BaseModel
 
 from agent import ChatAgent
 from limits import DAILY_BUDGET_USD, Limits, estimate_cost_usd
+from response_cleaner import out_of_range_refusal
 
 TURNSTILE_SECRET = os.getenv("TURNSTILE_SECRET", "")
 TURNSTILE_VERIFY_URL = "https://challenges.cloudflare.com/turnstile/v0/siteverify"
@@ -126,7 +127,7 @@ for alias, canonical in PREBUILT_ALIASES.items():
         PREBUILT_ANSWERS[alias] = PREBUILT_ANSWERS[canonical]
 
 PREBUILT_NORMALIZED = {_norm(k): v for k, v in PREBUILT_ANSWERS.items()}
-PREBUILT_DELAY_SEC = float(os.getenv("PREBUILT_DELAY_SEC", "7"))
+PREBUILT_DELAY_SEC = float(os.getenv("PREBUILT_DELAY_SEC", "3"))
 
 agent = ChatAgent()
 limits = Limits()
@@ -181,6 +182,25 @@ def _sse(payload: dict) -> str:
     return f"data: {json.dumps(payload)}\n\n"
 
 
+# Average $ cost per answered query, used to project how many queries are
+# left in today's $5 budget. Calibrated from observed Sonnet 4.6 runs: ~65
+# queries per day at DAILY_BUDGET_USD = 5.00 ⇒ ~$0.077/query.
+AVG_COST_PER_QUERY_USD = DAILY_BUDGET_USD / 65.0
+
+
+def _budget_remaining_payload() -> dict:
+    """JSON-safe dict that every /chat response includes so the client can
+    render the 'Demo credit: X of 65 remaining today' banner."""
+    remaining_usd = limits.budget_remaining_usd()
+    remaining_queries = int(remaining_usd // AVG_COST_PER_QUERY_USD)
+    exhausted = limits.budget_exhausted() or remaining_queries <= 0
+    return {
+        "budget_remaining": max(0, remaining_queries),
+        "budget_total": 65,
+        "budget_exhausted": exhausted,
+    }
+
+
 @app.get("/health")
 def health() -> dict:
     return {
@@ -196,6 +216,13 @@ def health() -> dict:
 def metrics() -> PlainTextResponse:
     budget_gauge.set(limits.budget_remaining_usd())
     return PlainTextResponse(generate_latest(METRICS), media_type=CONTENT_TYPE_LATEST)
+
+
+@app.get("/budget")
+def budget() -> dict:
+    """Lightweight GET endpoint the client hits on page load so the banner
+    shows the current demo-credit count before the first chat message."""
+    return _budget_remaining_payload()
 
 
 @app.post("/chat")
@@ -260,19 +287,38 @@ def chat(req: ChatRequest, request: Request) -> StreamingResponse:
             chunk_size = 120
             for i in range(0, len(prebuilt), chunk_size):
                 yield _sse({"type": "text", "content": prebuilt[i:i+chunk_size]})
+            yield _sse({"type": "budget", **_budget_remaining_payload()})
             yield _sse({"type": "done"})
         return StreamingResponse(prebuilt_stream(), media_type="text/event-stream")
+
+    # Hard-refuse queries that target a date outside 2023-01-01 → 2025-12-31
+    # or request a future forecast. Keeps us from burning budget on the
+    # adversarial report's F2/F10 fabrication class.
+    refusal = out_of_range_refusal(req.message)
+    if refusal:
+        req_counter.labels(outcome="out_of_range_refusal").inc()
+        log.info("out-of-range refusal",
+                 extra={"request_id": request_id, "ip": ip,
+                        "outcome": "out_of_range_refusal",
+                        "latency_ms": int((time.time() - start) * 1000),
+                        "user_msg": req.message.strip()[:120]})
+        def refusal_stream():
+            yield _sse({"type": "text", "content": refusal})
+            yield _sse({"type": "budget", **_budget_remaining_payload()})
+            yield _sse({"type": "done"})
+        return StreamingResponse(refusal_stream(), media_type="text/event-stream")
 
     if limits.budget_exhausted():
         req_counter.labels(outcome="budget_exhausted").inc()
         log.info("budget exhausted - hero fallback",
                  extra={"request_id": request_id, "ip": ip,
                         "outcome": "budget_exhausted"})
-        return StreamingResponse(
-            iter([_sse({"type": "text", "content": HERO_FALLBACK}),
-                  _sse({"type": "done"})]),
-            media_type="text/event-stream",
-        )
+        def hero_fallback_stream():
+            time.sleep(PREBUILT_DELAY_SEC)
+            yield _sse({"type": "text", "content": HERO_FALLBACK})
+            yield _sse({"type": "budget", **_budget_remaining_payload()})
+            yield _sse({"type": "done"})
+        return StreamingResponse(hero_fallback_stream(), media_type="text/event-stream")
 
     log.info("chat to claude",
              extra={"request_id": request_id, "ip": ip,
@@ -287,6 +333,9 @@ def chat(req: ChatRequest, request: Request) -> StreamingResponse:
             for chunk in agent.stream_answer(req.history, req.message):
                 if chunk["type"] == "text":
                     yield _sse({"type": "text", "content": chunk["content"]})
+                elif chunk["type"] == "replace":
+                    # Post-processed replacement (e.g. last-N-days trim).
+                    yield _sse({"type": "replace", "content": chunk["content"]})
                 elif chunk["type"] == "file":
                     yield _sse({
                         "type": "file",
@@ -309,6 +358,7 @@ def chat(req: ChatRequest, request: Request) -> StreamingResponse:
                     cost_counter.inc(cost)
                     budget_gauge.set(limits.budget_remaining_usd())
             req_counter.labels(outcome="ok").inc()
+            yield _sse({"type": "budget", **_budget_remaining_payload()})
             yield _sse({"type": "done"})
             log.info("chat ok",
                      extra={"request_id": request_id, "ip": ip,
@@ -358,6 +408,10 @@ def hero_image():
 @app.get("/sample_report.pdf")
 def sample_report():
     return FileResponse(STATIC_DIR / "sample_report.pdf", media_type="application/pdf")
+
+@app.get("/architecture.svg")
+def architecture_svg():
+    return FileResponse(STATIC_DIR / "architecture.svg", media_type="image/svg+xml")
 
 # ---------------------------- WhatsApp via Twilio ----------------------------
 
@@ -495,6 +549,7 @@ def _twilio_process(request_id: str, from_phone: str, user_text: str) -> None:
             return
 
         if limits.budget_exhausted():
+            time.sleep(PREBUILT_DELAY_SEC)
             _twilio_send(from_phone, HERO_FALLBACK)
             req_counter.labels(outcome="budget_exhausted").inc()
             return

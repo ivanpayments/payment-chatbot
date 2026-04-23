@@ -13,7 +13,11 @@ from typing import Iterator
 
 from anthropic import Anthropic
 
-from project3_tool import PROJECT3_TOOL_SCHEMA, call_project3_api
+from response_cleaner import (
+    clean_response,
+    trim_last_n_days,
+    user_requested_last_n_days,
+)
 from routing_tool import ROUTING_TOOL_SCHEMA, call_routing_api
 
 log = logging.getLogger("chatbot.agent")
@@ -30,7 +34,7 @@ MAX_TOOL_ITERATIONS = 4
 
 BASE_PROMPT = """You are the in-house payments analyst for the **Head of Payments / RevOps at a global SaaS**. You have access to ~100K billing attempts representing **one SaaS company's subscription book** via the code_execution tool — the file is attached to the user message; load it with pandas.read_csv on the mounted path.
 
-**The book you are analyzing.** One parent SaaS company (mid-market/enterprise hybrid, Notion/Intercom-scale — not Stripe-scale). Its billing stack runs ~100 plan SKUs (plan tier × billing cadence × geographic entity), routed over 14 PSPs in 30 countries — roughly **$2B ARR**. Each row in the CSV is one billing attempt (invoice/charge), not a gross payment; outcomes, retry depth, dunning state, and SCA exemption flags are all first-class fields. When asked for headline ARR, anchor on the $2B figure the Head of Payments reports; in-file revenue sums are attempt-level.
+**The book you are analyzing.** A mid-market global SaaS merchant. Its billing stack runs ~100 plan SKUs (plan tier × billing cadence × geographic entity), routed over 14 PSPs in 30 countries. Each row in the CSV is one billing attempt (invoice/charge), not a gross payment; outcomes, retry depth, dunning state, and SCA exemption flags are all first-class fields. Do not quote or extrapolate a headline ARR, TPV, or annual revenue figure — the CSV is a sample and in-file amount sums are attempt-level only. If a user asks for ARR/TPV, say the dataset is a sample and point them to contract-level data instead.
 
 **Schema highlights**:
 - `sku_id` — the company's internal plan SKU. ~100 distinct values, **all one parent SaaS**. Never describe this as "100 merchants" — it is 100 plan SKUs inside one book.
@@ -42,7 +46,7 @@ BASE_PROMPT = """You are the in-house payments analyst for the **Head of Payment
 - `attempt_id`, `subscription_id`, `timestamp`, `amount_usd`, `currency_code`, `status`, `is_approved`, `decline_category` (soft / hard / fraud), `decline_reason`.
 - `retry_depth` (0 = first attempt, 1+ = dunning retries), `card_updater_recovered` (bool), `sca_exemption` (none / tra / lvp / one_leg_out), `three_ds_triggered`, `network_token_used`.
 - `payment_method` (card / sepa_dd / ach_debit / ideal / wallet_apple / wallet_google / invoice_wire), `card_brand`, `card_type`.
-- Date range 2025-04-13 to 2026-04-11. ~30 currencies.
+- Date range 2023-01-01 to 2025-12-31. ~30 currencies.
 
 **Your voice and framing.** Speak as the analyst for this single SaaS book. The user is the Head of Payments / RevOps. Their stakeholders — CFO, Billing PM, Growth PM, regional ops leads, CEO — send them questions every day. Reference those stakeholders where it fits. **Never** say "across 100 merchants" or imply the book is multi-merchant / multi-vertical. Refer to the company as "the book", "our book", or "the business"; to plan lines as "plan SKUs" or "SKUs", never "merchants".
 
@@ -52,8 +56,6 @@ When a user asks a question:
 3. Be ready for follow-ups — the conversation is stateful.
 
 **Routing questions.** When the user asks WHICH PROVIDER/ARCHETYPE/ACQUIRER to route a transaction to — or asks "where should we send…", "best acquirer for…", "route options for…" — call the `query_routing_intelligence` tool with country, amount, and any details the user gave (currency, card brand/type, cross-border issuer, 3DS). The tool returns provider ARCHETYPE names (e.g. `regional-card-specialist-a`, `global-acquirer-b`, `cross-border-fx-specialist-b`) from a live simulator — these are archetype labels, NOT real-world PSP brand names. Never map them to Stripe/Adyen/etc. Present the recommended archetype, cite the approval rate and p50 latency, and show the top 3 in a compact table with a 1–2 sentence takeaway. If the tool returns `error: true`, relay the `error_message` plainly and do NOT fabricate a ranking. Do not mix CSV-book questions (historical) with routing questions (forward-looking) — the CSV book and the router are distinct data sources.
-
-**Retry model questions.** When the user asks whether a specific transaction should be retried, or asks for the retry recommendation on a named `transaction_id`, call the `predict_decline_recovery` tool. Use it for questions like "should I retry transaction txn_123?" or "what does the retry model say about txn_123?". The tool returns recoverability, recommended action, expected value, confidence, and a short explanation. If the tool returns `error: true`, relay the error plainly and do not invent a score.
 
 **Be ruthlessly brief.** Hard cap: **300 words of prose total** (excluding code and tables). No warm-up paragraphs, no recaps, no "let me first explore the data" preamble. Lead with the headline number. If the answer needs more depth, the user will ask a follow-up. Keep code tight — prefer groupby + agg over loops. Round percentages to 1 decimal. Do not echo the question back.
 
@@ -109,6 +111,13 @@ class ChatAgent:
         tool: if the model stops with `tool_use` pointing at our tool, we execute
         it, append a `tool_result` message, and re-stream. `code_execution` is
         server-executed, so we only loop on our own custom tool.
+
+        Streamed text is passed through ``response_cleaner.clean_response``
+        on sentence boundaries so scratch-pad leaks from the model never
+        reach the client. At end-of-turn, if the user asked for "last N
+        days" but the answer contains more than N date rows, we emit a
+        ``replace`` chunk with the trimmed version so the UI can overwrite
+        the message.
         """
         if self.file_id is None:
             raise RuntimeError("CSV not uploaded — call upload_csv() on startup")
@@ -124,13 +133,18 @@ class ChatAgent:
         tools = [
             {"type": "code_execution_20250825", "name": "code_execution"},
             ROUTING_TOOL_SCHEMA,
-            PROJECT3_TOOL_SCHEMA,
         ]
 
         total_in = 0
         total_out = 0
         total_cache_read = 0
         total_cache_write = 0
+
+        # Accumulate full raw text across the full turn (spanning tool-use
+        # loops) so we can post-process and, if needed, replace the streamed
+        # output with a cleaned version at the very end.
+        raw_text_total = ""
+        emitted_len = 0  # how many chars of raw_text_total we've already shipped
 
         for iteration in range(MAX_TOOL_ITERATIONS):
             with self.client.beta.messages.stream(
@@ -146,8 +160,31 @@ class ChatAgent:
                 messages=messages,
                 betas=BETAS,
             ) as stream:
+                buf = ""
                 for text_chunk in stream.text_stream:
-                    yield {"type": "text", "content": text_chunk}
+                    raw_text_total += text_chunk
+                    buf += text_chunk
+                    # Emit only up to the last sentence/newline boundary, so
+                    # clean_response can operate on whole sentences. This
+                    # gives the user live streaming while blocking mid-
+                    # sentence scratch-pad leaks from being shown.
+                    last_break = max(buf.rfind("\n"), buf.rfind(". "),
+                                     buf.rfind("! "), buf.rfind("? "))
+                    if last_break >= 0:
+                        head = buf[: last_break + 1]
+                        tail = buf[last_break + 1 :]
+                        cleaned_head = clean_response(head)
+                        if cleaned_head:
+                            yield {"type": "text", "content": cleaned_head}
+                            emitted_len += len(cleaned_head)
+                        buf = tail
+                # Flush any trailing unterminated fragment (usually just a
+                # final "." that didn't have a trailing space).
+                if buf:
+                    cleaned_tail = clean_response(buf)
+                    if cleaned_tail:
+                        yield {"type": "text", "content": cleaned_tail}
+                        emitted_len += len(cleaned_tail)
                 final = stream.get_final_message()
 
                 for file_meta in self._download_generated_files(final):
@@ -176,7 +213,8 @@ class ChatAgent:
                 if tu["name"] == ROUTING_TOOL_SCHEMA["name"]:
                     result = call_routing_api(tu["input"])
                 else:
-                    result = call_project3_api(tu["input"])
+                    result = {"error": True,
+                              "error_message": f"unknown client tool: {tu['name']}"}
                 tool_results.append({
                     "type": "tool_result",
                     "tool_use_id": tu["id"],
@@ -185,6 +223,15 @@ class ChatAgent:
                 })
             messages.append({"role": "user", "content": tool_results})
             # Loop and stream the follow-up turn.
+
+        # Post-process: if user asked "last N days" but the assembled answer
+        # has > N date rows, emit a trimmed replacement.
+        n_days = user_requested_last_n_days(user_text)
+        if n_days is not None:
+            cleaned_full = clean_response(raw_text_total)
+            trimmed = trim_last_n_days(cleaned_full, n_days)
+            if trimmed != cleaned_full:
+                yield {"type": "replace", "content": trimmed}
 
         yield {
             "type": "usage",
@@ -197,12 +244,13 @@ class ChatAgent:
     @staticmethod
     def _extract_client_tool_uses(final_message) -> list[dict]:
         """Return tool_use blocks we should execute client-side."""
+        client_tool_names = {ROUTING_TOOL_SCHEMA["name"]}
         out: list[dict] = []
         for block in getattr(final_message, "content", []) or []:
             if getattr(block, "type", None) != "tool_use":
                 continue
             name = getattr(block, "name", "")
-            if name not in {ROUTING_TOOL_SCHEMA["name"], PROJECT3_TOOL_SCHEMA["name"]}:
+            if name not in client_tool_names:
                 # code_execution server_tool_use blocks come back here too but
                 # we don't re-execute them — they're already resolved in-stream.
                 continue

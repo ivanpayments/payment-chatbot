@@ -5,16 +5,16 @@
     "sub": "Imagine you are the Head of Payments at a global SaaS company. The chatbot helps you manage the business by answering every question about your transactions in plain English",
     "stats": [
       {
+        "k": "Transactions analysed",
+        "v": "100,000"
+      },
+      {
         "k": "Countries",
         "v": "30"
       },
       {
-        "k": "Annual TPV",
-        "v": "~$2B"
-      },
-      {
-        "k": "Acquirers",
-        "v": "14"
+        "k": "Pattern checks passed",
+        "v": "150/150"
       }
     ]
   },
@@ -26,7 +26,7 @@
   "section_book": {
     "label": "Which data it uses",
     "heading": "Synthetic transaction data, designed to reproduce the statistical behaviour of payments within a global SaaS company",
-    "body_after_stats": "<p style='margin:0 0 10px'>The data includes various types of transaction data typically handled by SaaS companies:</p><ul style='margin:0 0 28px; padding-left:20px; font-size:15.5px; line-height:1.75; color:#222'><li style='margin:0 0 4px'>Authorization and processing status</li><li style='margin:0 0 4px'>Recurrent subscriptions</li><li style='margin:0 0 4px'>3DS flow and tokenization</li><li style='margin:0 0 4px'>Per-transaction FX, interchange and scheme fees applied</li><li style='margin:0 0 4px'>Retries and provider routing</li></ul>",
+    "body_after_stats": "<p style='margin:0 0 10px'>The book is routed over <b>14 acquirers</b>, with the data spanning authorization outcomes, fees, retries and provider routing:</p><ul style='margin:0 0 28px; padding-left:20px; font-size:15.5px; line-height:1.75; color:#222'><li style='margin:0 0 4px'>Authorization and processing status</li><li style='margin:0 0 4px'>Recurrent subscriptions</li><li style='margin:0 0 4px'>3DS flow and tokenization</li><li style='margin:0 0 4px'>Per-transaction FX, interchange and scheme fees applied</li><li style='margin:0 0 4px'>Retries and provider routing</li></ul>",
     "body_synthetic": "<b>The dataset is synthetic.</b> It has been engineered to reproduce the statistical behaviour of a book at this scale and is used for pattern analysis. In a production deployment, the same chatbot can be rebuilt on top of the company’s real systems and data sources (transaction processing engine, acquirer statements, data warehouse, etc.)"
   },
   "section_who": {
