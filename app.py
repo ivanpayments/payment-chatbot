@@ -23,6 +23,7 @@ from pydantic import BaseModel
 from agent import ChatAgent
 from guardrails import scrub_response
 from limits import DAILY_BUDGET_USD, Limits, estimate_cost_usd
+from model_router import MODEL_HAIKU, MODEL_OPUS, MODEL_SONNET
 from response_cleaner import out_of_range_refusal
 
 TURNSTILE_SECRET = os.getenv("TURNSTILE_SECRET", "")
@@ -122,8 +123,53 @@ def redact_pan(text: str) -> tuple[str, int]:
 
 
 PREBUILT_ALIASES = {
+    # Legacy v1 alias carried forward.
     "Our cost of payments went up this quarter. What's driving it, and how much of it can we actually fix?":
         "Our cost of payments went up by 2% this quarter. What's driving it, and how much of it can we actually fix?",
+
+    # v2 introspection aliases (adversarial report 2026-04-24). Six Opus-4.7
+    # prebuilts sit in prebuilt_answers.json but are NOT on the homepage
+    # chip strip — a user who types any semantic rephrasing of "what
+    # dataset is this", "which PSPs", "what's the date range",
+    # "retry recovery", "network token vs PAN", "cross-border vs
+    # domestic" will hit the canned answer instead of burning $ on a
+    # live-LLM round trip. Exact-string match first, then normalised.
+    # The canonical RHS is verbatim the prebuilt key.
+    "What dataset is this?": "What dataset am I asking about?",
+    "What dataset are we looking at?": "What dataset am I asking about?",
+    "Tell me about the dataset": "What dataset am I asking about?",
+    "What's in this data?": "What dataset am I asking about?",
+    "What data do you have?": "What dataset am I asking about?",
+    "What's the data?": "What dataset am I asking about?",
+    "Describe the dataset": "What dataset am I asking about?",
+
+    "What PSPs are in the data?": "Which PSPs are in the data?",
+    "Which processors do we use?": "Which PSPs are in the data?",
+    "What processors are in the data?": "Which PSPs are in the data?",
+    "Which acquirers are in the data?": "Which PSPs are in the data?",
+    "List the PSPs": "Which PSPs are in the data?",
+    "Who are our processors?": "Which PSPs are in the data?",
+
+    "What is the date range of the dataset?": "What's the date range of the dataset?",
+    "What dates does the data cover?": "What's the date range of the dataset?",
+    "What time period is this?": "What's the date range of the dataset?",
+    "How far back does the data go?": "What's the date range of the dataset?",
+    "When does the data start and end?": "What's the date range of the dataset?",
+
+    "What is the retry recovery rate?": "What's the retry recovery rate?",
+    "How good are our retries?": "What's the retry recovery rate?",
+    "What's our retry success rate?": "What's the retry recovery rate?",
+    "What is our retry success rate?": "What's the retry recovery rate?",
+
+    "What is the network-token vs PAN approval difference?": "What's the network-token vs PAN approval difference?",
+    "Network token vs PAN approval?": "What's the network-token vs PAN approval difference?",
+    "Do network tokens lift approval?": "What's the network-token vs PAN approval difference?",
+    "What's the token lift?": "What's the network-token vs PAN approval difference?",
+
+    "What is the approval-rate difference between cross-border and domestic transactions?": "What's the approval-rate difference between cross-border and domestic transactions?",
+    "Cross-border vs domestic approval?": "What's the approval-rate difference between cross-border and domestic transactions?",
+    "What's the cross-border approval gap?": "What's the approval-rate difference between cross-border and domestic transactions?",
+    "How does cross-border approval compare to domestic?": "What's the approval-rate difference between cross-border and domestic transactions?",
 }
 for alias, canonical in PREBUILT_ALIASES.items():
     if canonical in PREBUILT_ANSWERS:
@@ -209,7 +255,16 @@ def health() -> dict:
     return {
         "ok": True,
         "file_uploaded": agent.file_id is not None,
-        "model": os.getenv("CHATBOT_MODEL", "claude-sonnet-4-6"),
+        # The router selects Haiku/Sonnet/Opus per query — `model_default`
+        # is Sonnet (the fallback when neither a hard nor a simple trigger
+        # matches). `model_opus`/`model_sonnet`/`model_haiku` surface the
+        # exact IDs the router resolves to, so the health endpoint always
+        # agrees with `model_router.MODEL_*` and the homepage copy
+        # (adversarial report P1-5, 2026-04-24).
+        "model_default": MODEL_SONNET,
+        "model_haiku": MODEL_HAIKU,
+        "model_sonnet": MODEL_SONNET,
+        "model_opus": MODEL_OPUS,
         "budget_remaining_usd": round(limits.budget_remaining_usd(), 4),
         "budget_daily_usd": DAILY_BUDGET_USD,
     }

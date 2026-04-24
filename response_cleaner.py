@@ -36,6 +36,7 @@ DATA_END = date(2025, 12, 31)
 # insensitive). If a sentence matches, the whole sentence is removed.
 _LEAK_SENTENCE_PATTERNS = [
     re.compile(p, re.IGNORECASE) for p in (
+        # v1 phrasings
         r"the schema doesn['’]?t match",
         r"the csv schema doesn['’]?t match",
         r"the data schema doesn['’]?t match",
@@ -48,6 +49,44 @@ _LEAK_SENTENCE_PATTERNS = [
         r"^good\s*[—-]\s*i now have",
         r"i now have everything i need",
         r"the dataset['’]?s date range is 2025",
+        # v2 phrasings — schema reconciliation leaks (adversarial report P0-1/P0-2)
+        r"processor values have no\s*`?psp[_\s]?`?\s*prefix",
+        r"processor values have no\s+`?psp_`?\s*prefix (in|for) this file",
+        r"decline_category in this file uses reason codes",
+        r"decline_category uses reason codes",
+        r"the\s+`?decline_category`?\s+in\s+this\s+file",
+        r"^\s*fixing(:|\s+that)\.?\s*$",
+        r"^\s*fixing that[.,]?\s*$",
+        r"retrying via pandas directly",
+        r"retrying via pandas",
+        # tool-infrastructure leaks
+        r"deterministic metrics tool is failing",
+        r"metrics.?tool (is failing|errored out|errored)",
+        r"the deterministic\s+`?metrics_tool`?\s+errored",
+        r"(could not|couldn['’]?t) load csv",
+        r"no module named ['\"]?pandas['\"]?",
+        r"infrastructure error",
+        # pandas-internal narration
+        r"pandas raised a mixed.?type warning",
+        r"i['’]ll use\s+`?low_memory\s*=\s*false`?",
+        r"let me inspect the column names",
+        r"let me load the (csv|dataset|file)",
+        r"let me check the (column names|dtypes|schema|columns)",
+        # workflow-verb prefixes (announcement + pre-stream strip)
+        # These match sentences that BEGIN with "I'll/Let me/Now I'll/First, I'll/I'm going to"
+        # followed by a model-workflow verb like load/inspect/check/run/pull/search/
+        # calculate/verify/retry/fix/compute.
+        r"^\s*i['’]ll\s+(load|inspect|check|run|pull|search|verify|retry|fix|compute|calculate|look|examine)\b",
+        r"^\s*let me\s+(load|inspect|check|run|pull|search|verify|retry|fix|compute|calculate|look|examine)\b",
+        r"^\s*let['’]?s\s+(load|inspect|check|run|pull|search|verify|retry|fix|compute|calculate|look|examine)\b",
+        r"^\s*now i['’]ll\s+(load|inspect|check|run|pull|search|verify|retry|fix|compute|calculate|look|examine)\b",
+        r"^\s*now i\s+(load|inspect|check|run|pull|search|verify|retry|fix|compute|calculate|look|examine)\b",
+        r"^\s*first[,\s]+i['’]?ll\s+(load|inspect|check|run|pull|search|verify|retry|fix|compute|calculate|look|examine)\b",
+        r"^\s*i['’]?m going to\s+(load|inspect|check|run|pull|search|verify|retry|fix|compute|calculate|look|examine)\b",
+        r"^\s*i['’]ll search for",
+        # self-promise leaks
+        r"i['’]ll use.{0,40}in all subsequent loads",
+        r"in all subsequent (loads|reads|imports)",
     )
 ]
 

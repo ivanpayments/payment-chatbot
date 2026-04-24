@@ -61,8 +61,8 @@
   },
   "section_howbuilt": {
     "label": "How it works",
-    "heading": "Claude Opus writing scripts in a sandboxed environment",
-    "body": "Claude Opus 4.6 writes and runs Python scripts in a sandboxed environment against the transaction dataset, and streams the answer back. Two selected questions carry pre-generated answers to enable quick user demo. The same agent also answers on WhatsApp and SMS, connected via Twilio"
+    "heading": "Anthropic Claude writing scripts in a sandboxed environment",
+    "body": "An Anthropic Claude frontier model writes and runs Python scripts in a sandboxed environment against the transaction dataset, and streams the answer back. The router picks Haiku for simple lookups, Sonnet by default, and Opus for multi-hop or counterfactual questions. Pre-generated answers are served for a handful of canonical demo questions. The same agent also answers on WhatsApp and SMS, connected via Twilio"
   },
   "cta": {
     "text": "Give it a try",
@@ -86,19 +86,23 @@
       },
       {
         "stakeholder": "Product",
-        "question": "How much revenue has the card-refresh tool saved us so far, and is it worth rolling it out everywhere?"
+        "question": "How much revenue has the card-refresh tool saved us so far, and is it worth rolling it out everywhere?",
+        "prebuilt": true
       },
       {
         "stakeholder": "Strategy",
-        "question": "When a payment fails at one processor, trying a different one often works. Which five markets would recover the most money from that?"
+        "question": "When a payment fails at one processor, trying a different one often works. Which five markets would recover the most money from that?",
+        "prebuilt": true
       },
       {
         "stakeholder": "Finance",
-        "question": "Which of our processors is charging more than the contracted rate for currency conversion, and how much is it costing us a year?"
+        "question": "Which of our processors is charging more than the contracted rate for currency conversion, and how much is it costing us a year?",
+        "prebuilt": true
       },
       {
         "stakeholder": "CEO brief",
-        "question": "How does our approval rate compare to other SaaS companies of our size, and what is the single biggest change that would close the gap?"
+        "question": "How does our approval rate compare to other SaaS companies of our size, and what is the single biggest change that would close the gap?",
+        "prebuilt": true
       }
     ],
     "placeholder": "Type a question…",

@@ -6,3 +6,7 @@ prometheus-client>=0.20.0
 httpx>=0.27.0
 twilio>=9.0.0
 python-multipart>=0.0.9
+# metrics_tool and response_cleaner perform deterministic pandas reads on
+# the 100K-row CSV — without this pin the prod systemd venv can miss
+# pandas entirely (adversarial v2 report P0-3, 2026-04-24).
+pandas>=2.2.0

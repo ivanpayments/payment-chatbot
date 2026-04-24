@@ -39,6 +39,18 @@ _AMOUNT_BUCKETS = [
     (">=1000", 1000, float("inf")),
 ]
 
+# Reason-code → soft/hard/fraud bucket map. The actual CSV stores a flat
+# reason code in `decline_category` (e.g. `do_not_honor`, `lost_stolen`,
+# `ml_blocked`), NOT a pre-bucketed {soft|hard|fraud} taxonomy. Without
+# this mapping every retry-recovery call would filter on
+# `decline_category == 'soft'` and return an empty result (adversarial v2
+# report P0-3, 2026-04-24). Values verified against
+# `Claude files/csv_schema_2026-04-24.json`.
+SOFT_REASONS = {"do_not_honor", "insufficient_funds", "generic",
+                "expired_card", "3ds_required", "sca_required"}
+HARD_REASONS = {"lost_stolen"}
+FRAUD_REASONS = {"ml_blocked"}
+
 _df = None
 _df_lock = threading.Lock()
 
@@ -66,20 +78,48 @@ def _load_df():
         df = pd.read_csv(path, low_memory=False)
 
         # Schema normalisation: map generator-native columns to the names
-        # BASE_PROMPT (and this module) use. Non-destructive — adds new
+        # this module uses internally. Non-destructive — adds a new
         # column only if the target name is missing.
         if "timestamp" not in df.columns and "created_at" in df.columns:
             df["timestamp"] = df["created_at"]
         if "retry_depth" not in df.columns and "retry_count" in df.columns:
             df["retry_depth"] = df["retry_count"]
+        # NB: the real CSV uses `decline_category` for the reason code
+        # (`do_not_honor`, `insufficient_funds`, …), not a soft/hard/fraud
+        # bucket. `response_code` is a two-valued approve/decline indicator
+        # ('0' / '5'), NOT a reason-level code, so copying it into
+        # `decline_reason` is misleading — we keep the old aliasing for
+        # callers that still pass `response_code=` but add the real
+        # reason-level view via `decline_reason_real`.
         if "decline_reason" not in df.columns and "response_code" in df.columns:
             df["decline_reason"] = df["response_code"]
+        if "decline_category" in df.columns:
+            cat_lower = df["decline_category"].astype(str).str.lower()
+            df["decline_reason_code"] = cat_lower
+            df["decline_bucket"] = cat_lower.map(_bucket_for_reason).fillna("other")
 
         if "timestamp" in df.columns:
             df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
         _df = df
         log.info("metrics_tool CSV loaded rows=%d cols=%d", len(df), len(df.columns))
         return _df
+
+
+def _bucket_for_reason(reason_code: str) -> str:
+    """Map a raw reason code (lowercase) to 'soft' | 'hard' | 'fraud' |
+    'other'. `nan` / empty / unknown → 'other' so callers can distinguish
+    approved rows and unmapped codes from real declines.
+    """
+    if not reason_code or reason_code == "nan":
+        return "other"
+    r = reason_code.strip().lower()
+    if r in SOFT_REASONS:
+        return "soft"
+    if r in HARD_REASONS:
+        return "hard"
+    if r in FRAUD_REASONS:
+        return "fraud"
+    return "other"
 
 
 def _amount_bucket_filter(df, amount_bucket: str | None):
@@ -150,13 +190,24 @@ def soft_decline_recovery_rate(
         return _err(f"no rows for country {country_code}"
                     + (f" (amount_bucket={amount_bucket})" if amount_bucket else ""))
 
-    soft = scope[scope["decline_category"].astype(str).str.lower() == "soft"]
+    # The real CSV stores per-row reason codes directly in `decline_category`
+    # (values in SOFT_REASONS | HARD_REASONS | FRAUD_REASONS). We use the
+    # bucketed view `decline_bucket` added in _load_df() so the taxonomy
+    # (soft / hard / fraud) stays consistent regardless of how the raw
+    # CSV names its reason codes.
+    if "decline_bucket" in scope.columns:
+        soft = scope[scope["decline_bucket"] == "soft"]
+    else:
+        soft = scope[scope["decline_category"].astype(str).str.lower() == "soft"]
     if response_code:
         rc = response_code.strip().lower()
-        if "decline_reason" in soft.columns:
+        # Prefer the real reason-code column we added in _load_df().
+        if "decline_reason_code" in soft.columns:
+            soft = soft[soft["decline_reason_code"] == rc]
+        elif "decline_reason" in soft.columns:
             soft = soft[soft["decline_reason"].astype(str).str.lower() == rc]
         else:
-            return _err("decline_reason column not available for response_code filter")
+            return _err("decline reason column not available for response_code filter")
     if len(soft) == 0:
         return _err(f"no soft declines for country {country_code}"
                     + (f" reason={response_code}" if response_code else ""))
@@ -243,15 +294,36 @@ def retry_recovery_by_category(
     if len(retries) == 0:
         return _err(f"no retry rows for country {country_code}")
 
+    # Per reason-code breakdown (the model almost always wants this level
+    # of detail — do_not_honor vs insufficient_funds vs expired_card, etc.).
     breakdown: dict[str, dict[str, Any]] = {}
-    for cat, sub in retries.groupby(retries["decline_category"].astype(str).str.lower()):
+    reason_col = retries["decline_category"].astype(str).str.lower()
+    for cat, sub in retries.groupby(reason_col):
+        if cat in ("nan", "none", ""):
+            continue
         n = int(len(sub))
         approved = int(sub["is_approved"].sum())
         breakdown[cat] = {
             "retry_attempts": n,
             "approved_retries": approved,
             "attempt_level_retry_approval_rate": round(approved / n, 4) if n else 0.0,
+            "bucket": _bucket_for_reason(cat),
         }
+
+    # Bucketed breakdown (soft/hard/fraud) so the answer is stable under
+    # any rephrasing that uses the soft/hard/fraud wording.
+    bucket_breakdown: dict[str, dict[str, Any]] = {}
+    if "decline_bucket" in retries.columns:
+        for bkt, sub in retries.groupby("decline_bucket"):
+            if bkt == "other":
+                continue
+            n = int(len(sub))
+            approved = int(sub["is_approved"].sum())
+            bucket_breakdown[bkt] = {
+                "retry_attempts": n,
+                "approved_retries": approved,
+                "attempt_level_retry_approval_rate": round(approved / n, 4) if n else 0.0,
+            }
 
     overall_n = int(len(retries))
     overall_approved = int(retries["is_approved"].sum())
@@ -260,14 +332,18 @@ def retry_recovery_by_category(
         "country": country_code,
         "vertical_filter": vertical,
         "by_category": breakdown,
+        "by_bucket": bucket_breakdown,
         "overall_retry_attempts": overall_n,
         "overall_approved_retries": overall_approved,
         "overall_attempt_level_retry_approval_rate":
             round(overall_approved / overall_n, 4) if overall_n else 0.0,
         "definition_note": (
             "Rates are attempt-level: approved retries / total retries where "
-            "retry_depth>=1. Use soft_decline_recovery_rate for "
-            "subscription-level recovery on soft declines specifically."
+            "retry_depth>=1. `by_category` splits by raw reason code "
+            "(do_not_honor, insufficient_funds, expired_card, …). "
+            "`by_bucket` rolls those up into soft / hard / fraud. Use "
+            "soft_decline_recovery_rate for subscription-level recovery on "
+            "soft declines specifically."
         ),
         "source": "metrics_tool.retry_recovery_by_category (deterministic)",
     }
@@ -325,20 +401,32 @@ def approval_drop_causes(
     prior_rate = _rate(prior)
     delta_overall_pp = round((recent_rate - prior_rate) * 100.0, 2)
 
-    # Per-cause breakdown: change in share of declines by decline_reason.
+    # Per-cause breakdown: change in share of declines by reason code.
+    # The real reason-code column is `decline_category` in this CSV
+    # (values: do_not_honor, insufficient_funds, generic, expired_card,
+    # …) — NOT `decline_reason`, which is a back-compat alias that maps
+    # to the approve/decline 2-valued `response_code` and has no
+    # analytical value.
+    cause_col = "decline_category" if "decline_category" in scope.columns else (
+        "decline_reason" if "decline_reason" in scope.columns else None
+    )
     causes: dict[str, dict[str, Any]] = {}
-    if "decline_reason" in scope.columns:
+    if cause_col is not None:
         def _cause_share(sub):
             declined = sub[sub["is_approved"] == False]
             total = len(declined)
             if total == 0:
                 return {}
-            return (declined["decline_reason"].astype(str).str.lower()
+            return (declined[cause_col].astype(str).str.lower()
                     .value_counts(normalize=True).round(4).to_dict())
 
         recent_shares = _cause_share(recent)
         prior_shares = _cause_share(prior)
         all_reasons = set(recent_shares) | set(prior_shares)
+        # Drop nan / empty buckets that surface from approved rows or
+        # missing reason codes — they're noise in a cause-shift view.
+        all_reasons.discard("nan")
+        all_reasons.discard("")
         for reason in all_reasons:
             r_share = recent_shares.get(reason, 0.0)
             p_share = prior_shares.get(reason, 0.0)
@@ -371,7 +459,7 @@ def approval_drop_causes(
             "approval_rate": round(prior_rate, 4),
         },
         "delta_approval_rate_pp": delta_overall_pp,
-        "top_cause_shifts_by_decline_reason": sorted_causes,
+        "top_cause_shifts_by_decline_category": sorted_causes,
         "source": "metrics_tool.approval_drop_causes (deterministic)",
     }
 
