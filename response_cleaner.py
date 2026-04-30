@@ -23,11 +23,21 @@ unit-testable standalone.
 from __future__ import annotations
 
 import re
-from datetime import date
+from datetime import date, timedelta
 
 # Dataset bounds — must match the CSV actually deployed on the server.
 DATA_START = date(2023, 1, 1)
 DATA_END = date(2025, 12, 31)
+
+# Soft upper bound on user-supplied dates: today + 30 days. Anything later
+# is treated as a future-forecast and refused symmetrically with the
+# pre-2023 rejection. Computed lazily so test fixtures can monkey-patch
+# date.today() if needed.
+_FUTURE_GRACE_DAYS = 30
+
+
+def _upper_bound() -> date:
+    return max(DATA_END, date.today() + timedelta(days=_FUTURE_GRACE_DAYS))
 
 # --- 1. Scratch-pad / reasoning leak filter ----------------------------------
 
@@ -167,7 +177,12 @@ def clean_response(text: str) -> str:
     # Collapse double spaces on prose lines (but leave table separator rows
     # like `|---|---|` alone — they don't have runs of spaces anyway).
     cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
-    return cleaned.strip()
+    # Preserve trailing whitespace from the input. The streamer in agent.py
+    # calls this per-chunk on text ending at a "\n" / ". " / "! " / "? "
+    # boundary; stripping the trailing newline collapses markdown table rows
+    # and paragraph breaks into one line on the client.
+    trailing = re.search(r"\s*\Z", text).group(0)
+    return cleaned.strip() + trailing
 
 
 # --- 2. Out-of-range / future-forecast refusal -------------------------------
@@ -177,6 +192,10 @@ REFUSAL_TEXT = (
     "(2023-01-01 to 2025-12-31). I can answer questions about data within "
     "that window."
 )
+
+# Symmetric refusal copy for the past-out-of-range case (e.g. user asks
+# about 1990). Same shape as REFUSAL_TEXT so the UI handles it identically.
+REFUSAL_TEXT_PAST = REFUSAL_TEXT
 
 # Month names — full and 3-letter. Ordered so regex prefers longer match.
 _MONTHS = {
@@ -195,7 +214,10 @@ _MONTH_YEAR_RE = re.compile(
 )
 # Matches bare ISO-ish "YYYY-MM" or "YYYY" in-year references.
 _ISO_YM_RE = re.compile(r"\b(\d{4})-(\d{1,2})(?:-(\d{1,2}))?\b")
-_YEAR_RE = re.compile(r"\b(20\d{2})\b")
+# Bare 4-digit year in the plausible "year people would write" range
+# (1900-2199). The previous `\b(20\d{2})\b` only caught 20XX, so user
+# prompts about 1990, 1850, 2199 fell through and burned LLM budget.
+_YEAR_RE = re.compile(r"\b(1[89]\d{2}|2[01]\d{2})\b")
 
 # Phrases that clearly ask for a forecast.
 _FORECAST_RE = re.compile(
@@ -208,13 +230,28 @@ _FORECAST_RE = re.compile(
 
 
 def _is_out_of_range_ym(year: int, month: int | None = None) -> bool:
-    if year < DATA_START.year or year > DATA_END.year:
+    """Symmetric out-of-range check.
+
+    Lower bound: ``DATA_START`` (2023-01-01). Anything earlier is rejected
+    regardless of how far back — the dataset simply doesn't contain it.
+
+    Upper bound: ``max(DATA_END, today + 30 days)``. The +30-day grace
+    keeps "Q1 2026" / "this month" usable when today's clock has moved
+    past DATA_END, while still rejecting clearly-future asks like
+    "forecast 2050".
+    """
+    upper = _upper_bound()
+    # Year-only checks first.
+    if year < DATA_START.year:
         return True
+    if year > upper.year:
+        return True
+    # Year matches a boundary — narrow with month if supplied.
     if month is None:
         return False
     if year == DATA_START.year and month < DATA_START.month:
         return True
-    if year == DATA_END.year and month > DATA_END.month:
+    if year == upper.year and month > upper.month:
         return True
     return False
 
@@ -267,7 +304,7 @@ def out_of_range_refusal(user_text: str) -> str | None:
         ):
             return REFUSAL_TEXT
         for m in _YEAR_RE.finditer(text):
-            if int(m.group(1)) > DATA_END.year:
+            if _is_out_of_range_ym(int(m.group(1))):
                 return REFUSAL_TEXT
 
     return None
@@ -350,11 +387,58 @@ def trim_last_n_days(text: str, n: int) -> str:
     return "\n".join(out_lines)
 
 
+# --- 4. File-generation intent leak + user-trigger detection ----------------
+#
+# Used by app.py to decide whether to fire a one-shot retry when the model
+# said it would generate a file but never actually fired the code_execution
+# tool. See plan_chatbot_file_generation_2026-04-26.md §3.
+
+_FILE_INTENT_LEAK_PATTERNS = [
+    re.compile(
+        r"\b(let me|i('|’|')?ll|i will|i can|i'd|i would|i am going to|i'm going to)\s+"
+        r"(build|create|generate|make|prepare|put together|produce|export|save|write)\s+"
+        r"(the |an? |your |you |this |a new |a fresh )?"
+        r"(excel|pdf|spreadsheet|model|report|file|chart|graph|csv|workbook|xlsx|png|plot)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(building|generating|creating|preparing|putting together|producing|exporting|saving)\s+"
+        r"(the|an?|your|this|a new)\s+"
+        r"(excel|pdf|spreadsheet|model|report|file|csv|workbook|xlsx|png|chart)\b",
+        re.IGNORECASE,
+    ),
+]
+
+
+def detect_file_intent_leak(text: str) -> bool:
+    """True if text narrates intent to create a file (a sign the model
+    leaked scratchpad rather than firing the code_execution tool)."""
+    if not text:
+        return False
+    return any(p.search(text) for p in _FILE_INTENT_LEAK_PATTERNS)
+
+
+USER_FILE_TRIGGER = re.compile(
+    r"\b(pdf|excel|xlsx|spreadsheet|csv|chart|graph|png|"
+    r"report file|workbook|plot)\b",
+    re.IGNORECASE,
+)
+
+
+def user_msg_requested_file(text: str) -> bool:
+    """True if the user's message explicitly asked for a downloadable file."""
+    if not text:
+        return False
+    return bool(USER_FILE_TRIGGER.search(text))
+
+
 __all__ = [
     "clean_response",
     "out_of_range_refusal",
     "user_requested_last_n_days",
     "trim_last_n_days",
+    "detect_file_intent_leak",
+    "user_msg_requested_file",
     "REFUSAL_TEXT",
     "DATA_START",
     "DATA_END",

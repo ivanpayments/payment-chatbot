@@ -69,7 +69,15 @@ def _is_extra_leak(sentence: str) -> bool:
 
 def strip_extra_leaks(text: str) -> str:
     """Drop sentences matching any extended forbidden-phrase pattern.
-    Preserves fenced code blocks untouched."""
+    Preserves fenced code blocks untouched.
+
+    Walks line-by-line so newlines (and therefore markdown structure —
+    headings, table rows, code fences, paragraph breaks) survive. Only
+    sentence-splits *within* a single line, never across newlines. The
+    previous behaviour split on ``\\n+`` globally and rejoined with
+    spaces, which collapsed every multi-line answer into a single line
+    and broke ``marked.parse`` rendering on the client (Bug 2 — raw
+    markdown surfaced as plaintext)."""
     if not text:
         return text
     out_chunks: list[str] = []
@@ -77,9 +85,16 @@ def strip_extra_leaks(text: str) -> str:
         if block.startswith("```"):
             out_chunks.append(block)
             continue
-        parts = _SENTENCE_SPLIT_RE.split(block)
-        kept = [p for p in parts if not _is_extra_leak(p)]
-        out_chunks.append(" ".join(kept))
+        new_lines: list[str] = []
+        for line in block.split("\n"):
+            if not line.strip():
+                # Blank line — preserve as paragraph break.
+                new_lines.append(line)
+                continue
+            parts = _SENTENCE_SPLIT_RE.split(line)
+            kept = [p for p in parts if not _is_extra_leak(p)]
+            new_lines.append(" ".join(kept) if kept else "")
+        out_chunks.append("\n".join(new_lines))
     cleaned = "".join(out_chunks)
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
     cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)

@@ -14,7 +14,12 @@ from typing import Iterator
 from anthropic import Anthropic
 
 from metrics_tool import METRICS_TOOL_SCHEMA, dispatch_metrics_tool
-from model_router import OPUS_PREAMBLE, resolve_model
+from model_router import (
+    MODEL_LABELS,
+    OPUS_PREAMBLE,
+    model_id_for,
+    resolve_model,
+)
 from response_cleaner import (
     clean_response,
     trim_last_n_days,
@@ -28,7 +33,7 @@ MODEL = os.getenv("CHATBOT_MODEL", "claude-sonnet-4-6")
 CSV_PATH = os.getenv("CHATBOT_CSV_PATH", "/opt/chatbot/data/transactions.csv")
 GENERATED_DIR = Path(os.getenv("CHATBOT_GENERATED_DIR", "/opt/chatbot/app/generated"))
 GENERATED_DIR.mkdir(parents=True, exist_ok=True)
-MAX_TOKENS = 3500
+MAX_TOKENS = 4096
 BETAS = ["files-api-2025-04-14"]
 
 # Safety cap for client-side tool loop — prevents runaway routing calls.
@@ -142,7 +147,97 @@ When a user asks a question:
 
 # Generating downloadable files
 
-When the user asks for a file (CSV, Excel, PNG chart, etc.), or the answer is large enough that a table in chat is awkward, save it in the code execution sandbox with a short, descriptive filename (e.g. `approval_by_country.csv`, `decline_trend.png`). The file will be surfaced to the user as a download link automatically — you do not need to print a link or base64 the content. Still include the short summary table + takeaway in your text response so the user sees the highlight without opening the file."""
+When the user asks for a file (CSV, Excel, PNG chart, etc.), or the answer is large enough that a table in chat is awkward, save it in the code execution sandbox with a short, descriptive filename (e.g. `approval_by_country.csv`, `decline_trend.png`). The file will be surfaced to the user as a download link automatically — you do not need to print a link or base64 the content. Still include the short summary table + takeaway in your text response so the user sees the highlight without opening the file.
+
+**Strict rule on files.** When the user mentions "pdf", "excel", "spreadsheet", "csv", "chart", "png", or "report file" — you MUST call the `code_execution` tool to produce the file. Do NOT write sentences like "let me build the Excel model" or "I will generate the PDF". Just call the tool. The user does not see your scratchpad. If you write file-creation intent without executing, the user gets nothing. Save files to `/tmp/` (e.g. `/tmp/approval_trend.pdf`, `/tmp/psp_volumes.xlsx`) using the libraries preloaded in the sandbox: `pandas` for CSV, `openpyxl` for XLSX, `matplotlib` for PNG charts, `reportlab` for PDF. Always actually run the code — do not narrate intent.
+
+**PDF style (when producing `.pdf`).** Use `reportlab.platypus` (`SimpleDocTemplate`, `Paragraph`, `Table`, `TableStyle`, `Spacer`), never raw `canvas`. Set `pagesize=LETTER` portrait, all margins `0.75*inch`. Structure: (1) bold title + 1-line subtitle with date window + row count, (2) 3-5 bullet summary leading with a metric or `$` figure, (3) optional matplotlib chart embedded via `Image(path, width=6.5*inch)` only if the answer is time-series or comparative, (4) detail table with bold header row, thousands separators, 1-decimal rates with `%`, (5) one-line methodology footer with data source + filters. Keep the reportlab script tight — under 60 lines. Do not print the pandas snippet inside the PDF, do not use page-number callbacks, do not mix portrait and landscape pages."""
+
+CITATION_RULES = """
+
+---
+
+# Citation rules — strict
+
+You may cite ONLY:
+
+1. The transaction CSV attached to this conversation (the only ground-truth source you can directly inspect).
+2. URLs and titles returned by your `web_search` tool in THIS conversation. When you cite a `web_search` result, you must include the article title and the full URL exactly as the tool returned them — never a bare publisher domain.
+
+You MUST NOT invent or cite:
+
+- Industry reports you have not actually retrieved (e.g. "Forrester 2024", "Gartner 2024", "McKinsey Global Payments Report 2024", "Adyen Retail Report 2024", "PYMNTS Benchmarks Institute 2024").
+- Vendor benchmark publications you have not retrieved.
+- Generic publisher-domain URLs without a specific article path (e.g. `https://www.forrester.com`, `https://www.pymnts.com`, `https://www.adyen.com/reports/retail`). If you do not have a specific article URL with a slug, do not cite the source at all.
+- Page numbers, report IDs, or quoted text from any source you have not directly inspected via `web_search`.
+
+If a user asks for an industry benchmark and you have no `web_search` result that grounds it, respond:
+
+> "I don't have a verifiable industry benchmark for that — only the dataset I'm querying. Treat my numbers as illustrative of what your own data could surface; ask your acquirer or analyst relationship for a peer-anonymized comparator."
+
+Then offer to compute the equivalent metric inside the dataset.
+"""
+
+ARITHMETIC_RULES = """
+
+---
+
+# Arithmetic discipline (non-negotiable)
+
+Any dollar figure you cite — revenue impact, recovery $, opportunity size, ARR delta, lift, "$X recovered", "$X at stake", per-row averages, annualised projections — MUST be derived via `code_execution` on the actual CSV rows in this turn. Never estimate a dollar figure from memory, prior context, or a "reasonable mean ticket" assumption. If you do not have the inputs to compute it deterministically, say "I don't have the inputs to put a dollar figure on that without recomputing — want me to pull the mean ticket for this slice and re-state?" — do NOT publish a guess.
+
+When you compute a dollar figure, show the inputs in one line below it: row count, mean ticket (from `df.amount_usd.mean()` on the same filter), and the multiplier (annualisation factor, coverage assumption). Example: "$376K = 1,444 rows × $260 mean amount_usd × 1.0 coverage." This makes the math auditable and gives the next turn a number to re-use.
+
+If a prior turn in this same conversation already produced a dollar figure for the same metric (same filter, same row count, same definition), you MUST either:
+
+(a) Re-use the exact prior number verbatim, OR
+(b) Explicitly reconcile the revision in one sentence before stating the new number. Example: "Earlier I cited $376K using a $260 mean ticket. Re-running on the segment's true mean amount_usd of $309 gives $446K — the earlier figure undercounted because I used a book-wide ASP not the expired-card slice." Never let two contradictory dollar figures for the same metric stand un-reconciled in the same session.
+
+When the user references a prior figure ("you said earlier...", "the previous answer said...", "but you quoted $X"), explicitly compare the prior number to the current one and reconcile the gap in one sentence before answering the new question. Do NOT silently re-derive a different number and move on.
+"""
+
+SYNTHETIC_DATA_RULES = """
+
+---
+
+# Synthetic-data awareness (artifact vs signal)
+
+The CSV you query is **synthetic** — generated by a seeding script, not collected from real merchants. Several patterns in this data are SEEDING ARTIFACTS, not real-world signals. You must recognise them and flag them as artifacts BEFORE drawing any "so what".
+
+## Patterns that are almost always artifacts on this dataset
+
+1. **Identical medians, modes, or means across countries / segments / cohorts / SKUs.** Real merchant books have noisy distributions; two countries with different local currencies, different FX paths, and different attempt counts will not produce identical USD medians to the cent. If you see two cells equal to the cent or to a round percent, that is a seed signature.
+2. **Round-number aggregates** — approval rates ending in `.00` across many cells, identical row counts across timeframes, totals that hit a round multiple of 1,000 or 10,000.
+3. **Perfectly correlated dimensions** — e.g. one card_brand mapping 1:1 to one country, one PSP only ever appearing on one currency, one decline_category only ever appearing on one card_brand.
+4. **Step-function changes at calendar boundaries** (Q-end, month-end, year-end) without a stated promo, outage, or routing change to explain them.
+5. **Suspiciously clean distributions** — no outliers in a high-volume amount column, zero nulls in a column that would be sparse in production (e.g. `chargeback_amount` populated on every row), no Bernoulli noise on a flag column that should toggle stochastically.
+
+## How to respond when you spot one
+
+Lead with the artifact disclosure, in plain English, BEFORE any "so what". Use a phrasing like:
+
+> "These two medians are identical to the cent — that's a seeding artifact, not a real-world signal. The synthetic generator used a uniform USD price ladder across countries, so identical USD medians here say nothing about whether the two markets actually share a ticket distribution. On a real merchant book I'd expect a $5–$15 USD gap driven by FX, local promo mix, and channel mix."
+
+Then, only after the disclosure, give the user the next-best move: "If you want a real read on BR vs MX ticket distribution, I'd pull the local-currency p25/p50/p75 by SKU tier and look for the spread, not the centre."
+
+**Never** frame an artifact as a strategic insight ("FX just differs", "same SKU mix is being billed", "no pricing-arbitrage signal here"). On synthetic data those phrasings are unfalsifiable rationalisations — the equality is upstream of FX or SKU mix, not downstream.
+
+## When the user asks directly: "is this real or an artifact?"
+
+Be direct. Most patterns this clean ARE artifacts. Default answer: "On a synthetic dataset, the cleaner the pattern the more likely it's a seed. The ones I'd treat as real are skewed distributions with long tails, segment differences that survive a noise check, and seasonal trends that match calendar logic the seed wouldn't have known about." Then point at any specific test you can run.
+
+## When you DO have a real finding
+
+Say so explicitly so the user can tell the difference:
+
+> "This one looks like a real pattern, not an artifact, because [the distribution is right-skewed with a credible tail / the segment difference is 8x not 1.0x / the trend follows trial-end cohorts which the seed wouldn't have aligned to]."
+
+A real finding has at least one of: skewed distribution with a long tail, a segment difference of clearly different magnitude (not just sign), a trend that aligns with a calendar event the seed wouldn't have engineered, or noise on a flag column that toggles stochastically across slices.
+
+## Don't over-apply
+
+Not every clean number is an artifact. The dataset's stated cardinalities (14 PSPs, 30 countries, 23 currencies, 108 SKUs, 100,000 rows) are by-construction, not artifacts. Schema enums (`status`, `decline_category`, `payment_method_type`) are by-construction. The rule applies to **derived statistics that should be noisy** — medians, means, rates, ratios, counts in time-bucketed cells.
+"""
 
 RESPONSE_STYLE = """
 
@@ -171,7 +266,10 @@ PCI_GUARDRAIL = """
 """
 
 
-SYSTEM_PROMPT = BASE_PROMPT + RESPONSE_STYLE + PCI_GUARDRAIL
+SYSTEM_PROMPT = (
+    BASE_PROMPT + CITATION_RULES + ARITHMETIC_RULES
+    + SYNTHETIC_DATA_RULES + RESPONSE_STYLE + PCI_GUARDRAIL
+)
 
 
 class ChatAgent:
@@ -187,7 +285,12 @@ class ChatAgent:
         self.file_id = uploaded.id
         return uploaded.id
 
-    def stream_answer(self, history: list[dict], user_text: str) -> Iterator[dict]:
+    def stream_answer(
+        self,
+        history: list[dict],
+        user_text: str,
+        tier_override: str | None = None,
+    ) -> Iterator[dict]:
         """Yields dicts: {'type':'text','content':str} and finally {'type':'usage',...}.
 
         Supports a tool-use loop for the client-side `query_routing_intelligence`
@@ -201,16 +304,31 @@ class ChatAgent:
         days" but the answer contains more than N date rows, we emit a
         ``replace`` chunk with the trimmed version so the UI can overwrite
         the message.
+
+        ``tier_override`` (added 2026-04-27 with the tier-selector buttons):
+        when set to ``"haiku"``, ``"sonnet"``, or ``"opus"`` the auto-router
+        is bypassed and the corresponding model is used directly. Anything
+        else falls through to ``resolve_model``.
         """
         if self.file_id is None:
             raise RuntimeError("CSV not uploaded — call upload_csv() on startup")
 
-        # Route to the right model tier based on the user's question.
-        # Haiku for cheap lookups, Sonnet default, Opus for multi-hop /
-        # counterfactual / forecast / ambiguous. `FORCE_MODEL` env var
-        # short-circuits classification for testing.
-        tier, resolved_model, tier_label = resolve_model(user_text)
-        log.info("model tier resolved: tier=%s model=%s", tier, resolved_model)
+        override = (tier_override or "").strip().lower()
+        if override in ("haiku", "sonnet", "opus"):
+            # User-forced tier from the UI selector. Skip the regex
+            # classifier entirely.
+            tier = override
+            resolved_model = model_id_for(tier)
+            tier_label = MODEL_LABELS[tier]
+            log.info("model tier overridden by user: tier=%s model=%s",
+                     tier, resolved_model)
+        else:
+            # Route to the right model tier based on the user's question.
+            # Haiku for cheap lookups, Sonnet default, Opus for multi-hop /
+            # counterfactual / forecast / ambiguous. `FORCE_MODEL` env var
+            # short-circuits classification for testing.
+            tier, resolved_model, tier_label = resolve_model(user_text)
+            log.info("model tier resolved: tier=%s model=%s", tier, resolved_model)
 
         # Emit a model event so the UI can render the tier badge before
         # any text streams in. Added as a NEW SSE event type — doesn't
@@ -538,21 +656,34 @@ class ChatAgent:
         - Hard-cap MAX_GENERATED_FILES_PER_TURN files per turn (drops any extras).
         - Reject any individual file larger than MAX_GENERATED_FILE_BYTES.
         - Normalise filenames via Path(...).name to block directory traversal.
+
+        Observability (added 2026-04-27 file-gen audit):
+        - Logs each code_execution_tool_result block scanned, the count of
+          file_ids found, and any download exceptions with the underlying
+          response shape so future regressions are diagnosable from logs.
         """
         out: list[dict] = []
         seen: set[str] = set()
+        blocks_scanned = 0
+        code_exec_results = 0
+        file_ids_found = 0
         for block in getattr(final_message, "content", []) or []:
+            blocks_scanned += 1
+            btype = getattr(block, "type", None)
             inner = getattr(block, "content", None)
             if inner is None:
                 continue
             nested = getattr(inner, "content", None)
             if not isinstance(nested, list):
                 continue
+            if btype == "code_execution_tool_result":
+                code_exec_results += 1
             for item in nested:
                 fid = getattr(item, "file_id", None)
                 if not fid or fid in seen:
                     continue
                 seen.add(fid)
+                file_ids_found += 1
                 if len(out) >= MAX_GENERATED_FILES_PER_TURN:
                     log.info("file cap reached, dropping remaining file_id=%s", fid)
                     continue
@@ -580,12 +711,24 @@ class ChatAgent:
                                     "size": 0,
                                     "error": f"file exceeds {MAX_GENERATED_FILE_BYTES} bytes"})
                         continue
+                    log.info(
+                        "file downloaded file_id=%s name=%s size=%d",
+                        fid, safe_name, size,
+                    )
                     out.append({
                         "file_id": fid,
                         "filename": safe_name,
                         "size": size,
                     })
                 except Exception as exc:
+                    log.exception(
+                        "file download failed file_id=%s exc=%s",
+                        fid, type(exc).__name__,
+                    )
                     out.append({"file_id": fid, "filename": "unknown", "size": 0,
                                 "error": str(exc)})
+        log.info(
+            "code_execution scan blocks=%d code_exec_results=%d file_ids=%d downloaded=%d",
+            blocks_scanned, code_exec_results, file_ids_found, len(out),
+        )
         return out

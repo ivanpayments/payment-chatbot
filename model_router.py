@@ -64,6 +64,16 @@ _HARD_PATTERNS = [
         r"\bshould (i|we) (be worried|act|fix|prioritise|prioritize)\b",
         r"\blast\s+\d+\s+(day|week|month)s?\b",
         r"\b(compare|comparison|vs\.?|versus)\b",
+        # File-generation triggers — route to Opus for reliability. File
+        # requests are flagship demo moments; Sonnet often narrates intent
+        # without firing code_execution. Cost is acceptable per plan
+        # (plan_chatbot_file_generation_2026-04-26.md §3).
+        r"\bpdf\b",
+        r"\b(excel|xlsx|workbook|spreadsheet)\b",
+        r"\bcsv\b",
+        r"\b(chart|graph|plot|png)\b",
+        r"\b(voice|audio|narrat\w*)\b",
+        r"\breport file\b",
     )
 ]
 

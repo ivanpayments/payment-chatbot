@@ -106,7 +106,17 @@ class Limits:
             return self._load().get(self._today_key(), 0.0)
 
     def budget_remaining_usd(self) -> float:
-        return max(0.0, DAILY_BUDGET_USD - self.spent_today_usd())
+        # Clamp BOTH ends. v5 audit N5 (2026-04-27) caught a case where
+        # budget.json carried a negative `spent_today` for a day
+        # (`{"2026-04-27": -8.69}` after a refund / accidental negative
+        # add_cost during testing). With only the lower clamp,
+        # `remaining = 5 - (-8.69) = 13.69`, which then propagated
+        # through `_budget_remaining_payload` as `budget_remaining: 178`
+        # vs the displayed `budget_total: 65` — confusing the UI.
+        # Capping at DAILY_BUDGET_USD keeps the invariant
+        # `0 <= remaining <= DAILY_BUDGET_USD` regardless of file state.
+        spent = self.spent_today_usd()
+        return max(0.0, min(DAILY_BUDGET_USD, DAILY_BUDGET_USD - spent))
 
     def budget_exhausted(self) -> bool:
         return self.spent_today_usd() >= DAILY_BUDGET_USD
