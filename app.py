@@ -64,7 +64,7 @@ class JSONFormatter(logging.Formatter):
         }
         for k in ("request_id", "ip", "outcome", "latency_ms",
                   "tokens_in", "tokens_out", "cost_usd", "history_len", "user_msg",
-                  "channel"):
+                  "channel", "external_user_id"):
             v = getattr(record, k, None)
             if v is not None:
                 obj[k] = v
@@ -1177,6 +1177,25 @@ def _history_for(from_phone: str) -> dict[str, list]:
     return WA_HISTORY if from_phone.startswith("whatsapp:") else SMS_HISTORY
 
 
+def _session_key(from_phone: str, external_user_id: str) -> str:
+    """Stable per-user key for conversation history and rate limiting.
+
+    Prefers Twilio's ``ExternalUserId`` (WhatsApp BSUID, e.g.
+    ``whatsapp:BR.1A2B3C...``) when present so a user who adopts a
+    WhatsApp username (June 2026 rollout) keeps their thread across the
+    transition: pre-adoption Twilio sends ``From=whatsapp:+E164`` plus
+    ``ExternalUserId=whatsapp:CC.alphanum``; post-adoption ``From`` and
+    ``ExternalUserId`` both carry the BSUID. The BSUID is stable across
+    that transition, so keying on it preserves continuity.
+
+    Falls back to ``from_phone`` for the SMS channel (no BSUID concept)
+    and for any pre-rollout WhatsApp webhook where ``ExternalUserId`` is
+    absent. Twilio inbound webhook population begins mid-May 2026 per
+    their developer notice.
+    """
+    return external_user_id or from_phone
+
+
 def _from_number_for(to: str) -> str:
     return TWILIO_WHATSAPP_FROM if to.startswith("whatsapp:") else TWILIO_SMS_FROM
 
@@ -1235,10 +1254,12 @@ def _twilio_send(to: str, body: str) -> None:
             time.sleep(0.25)
 
 
-def _twilio_process(request_id: str, from_phone: str, user_text: str) -> None:
+def _twilio_process(request_id: str, from_phone: str, external_user_id: str,
+                    user_text: str) -> None:
     start = time.time()
     channel = _channel_label(from_phone)
     history = _history_for(from_phone)
+    session_key = _session_key(from_phone, external_user_id)
 
     if channel == "sms":
         allowed, notify = _sms_check_and_inc()
@@ -1246,6 +1267,7 @@ def _twilio_process(request_id: str, from_phone: str, user_text: str) -> None:
             req_counter.labels(outcome="sms_daily_limit").inc()
             log.info("sms daily limit hit",
                      extra={"request_id": request_id, "ip": from_phone,
+                            "external_user_id": external_user_id,
                             "outcome": "sms_daily_limit", "channel": channel})
             if notify:
                 try:
@@ -1261,13 +1283,14 @@ def _twilio_process(request_id: str, from_phone: str, user_text: str) -> None:
         if prebuilt:
             time.sleep(PREBUILT_DELAY_SEC)
             _twilio_send(from_phone, prebuilt)
-            hist = history.setdefault(from_phone, [])
+            hist = history.setdefault(session_key, [])
             hist.append({"role": "user", "content": user_text})
             hist.append({"role": "assistant", "content": prebuilt})
             _trim_history(hist)
             req_counter.labels(outcome="prebuilt").inc()
             log.info(f"{channel} prebuilt",
                      extra={"request_id": request_id, "ip": from_phone,
+                            "external_user_id": external_user_id,
                             "outcome": "prebuilt", "channel": channel,
                             "latency_ms": int((time.time() - start) * 1000)})
             return
@@ -1278,7 +1301,7 @@ def _twilio_process(request_id: str, from_phone: str, user_text: str) -> None:
             req_counter.labels(outcome="budget_exhausted").inc()
             return
 
-        hist = history.setdefault(from_phone, [])
+        hist = history.setdefault(session_key, [])
         _trim_history(hist)
 
         parts: list[str] = []
@@ -1318,6 +1341,7 @@ def _twilio_process(request_id: str, from_phone: str, user_text: str) -> None:
         req_counter.labels(outcome="ok").inc()
         log.info(f"{channel} ok",
                  extra={"request_id": request_id, "ip": from_phone,
+                        "external_user_id": external_user_id,
                         "outcome": "ok", "channel": channel,
                         "latency_ms": int((time.time() - start) * 1000),
                         "tokens_in": tokens_in, "tokens_out": tokens_out,
@@ -1326,6 +1350,7 @@ def _twilio_process(request_id: str, from_phone: str, user_text: str) -> None:
         req_counter.labels(outcome="error").inc()
         log.exception(f"{channel} failed",
                       extra={"request_id": request_id, "ip": from_phone,
+                             "external_user_id": external_user_id,
                              "outcome": "error", "channel": channel})
         try:
             _twilio_send(from_phone, f"Sorry, something went wrong: {e}")
@@ -1342,6 +1367,12 @@ async def _twilio_webhook(request: Request, background: BackgroundTasks,
             raise HTTPException(403, "invalid twilio signature")
 
     from_phone = form.get("From", "")
+    # WhatsApp Usernames (June 2026): Twilio populates ExternalUserId with
+    # the user's BSUID (whatsapp:CC.alphanum, ≤140 chars). Always present
+    # for WhatsApp once Twilio's mid-May 2026 rollout completes; absent on
+    # SMS and on pre-rollout webhooks. We capture it as the stable session
+    # identifier — see _session_key() for the full rationale.
+    external_user_id = form.get("ExternalUserId", "")
     user_text = (form.get("Body") or "").strip()
     request_id = uuid.uuid4().hex[:12]
 
@@ -1352,19 +1383,23 @@ async def _twilio_webhook(request: Request, background: BackgroundTasks,
     if _pan_redactions:
         log.info(f"{endpoint_name} pan redacted",
                  extra={"request_id": request_id, "ip": from_phone,
+                        "external_user_id": external_user_id,
                         "outcome": "pan_redacted", "channel": endpoint_name})
 
-    if not limits.check_rate(from_phone):
+    rate_key = _session_key(from_phone, external_user_id)
+    if not limits.check_rate(rate_key):
         _twilio_send(from_phone, "Rate limit: 10 messages per minute. Try again shortly.")
         return Response(status_code=200)
 
     log.info(f"{endpoint_name} in",
              extra={"request_id": request_id, "ip": from_phone,
+                    "external_user_id": external_user_id,
                     "outcome": f"{endpoint_name}_in",
                     "channel": endpoint_name,
                     "user_msg": user_text[:120]})
 
-    background.add_task(_twilio_process, request_id, from_phone, user_text)
+    background.add_task(_twilio_process, request_id, from_phone,
+                        external_user_id, user_text)
     return Response(status_code=200)
 
 
